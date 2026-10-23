@@ -64,6 +64,33 @@ def wheel(widget):
     app.processEvents()
 
 
+def click_visible(widget, position=None):
+    position = position if position is not None else widget.rect().center()
+    global_position = widget.mapToGlobal(position)
+    root = widget.window()
+    receiver = root.childAt(root.mapFromGlobal(global_position))
+    assert receiver is not None, "No visible click target"
+    QTest.mouseClick(receiver, Qt.MouseButton.LeftButton, pos=receiver.mapFromGlobal(global_position))
+    app.processEvents()
+
+
+def dismiss_at(window, widget, position=None):
+    app.processEvents()
+    detail = window.detail_dialog
+    position = position if position is not None else widget.rect().center()
+    global_position = widget.mapToGlobal(position)
+    root = window.library_root
+    receiver = root.childAt(root.mapFromGlobal(global_position))
+    assert receiver is detail.backdrop, f"Outside target was {receiver}: point {global_position}, panel {detail.geometry()}"
+    local_position = receiver.mapFromGlobal(global_position)
+    QTest.mousePress(receiver, Qt.MouseButton.LeftButton, pos=local_position)
+    assert window.detail_dialog is detail, "The layer disappeared before the click ended"
+    QTest.mouseRelease(receiver, Qt.MouseButton.LeftButton, pos=local_position)
+    app.processEvents()
+    assert window.detail_dialog is None, "Outside click did not close details"
+    assert not any(w.isVisible() for w in window.library_root.findChildren(QWidget, "detailsBackdrop"))
+
+
 with tempfile.TemporaryDirectory(prefix="smartiptv-v110-") as directory:
     provider = Provider(ROOT / "tests/assets/resume.mp4").start()
     controller = Controller(app, directory, auto_login=False)
@@ -115,6 +142,38 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v110-") as directory:
         window.resize(1380, 900)
         app.processEvents()
 
+        # One outside click dismisses only. A separate new click can act.
+        window.navigate("movie")
+        movie = window.grid.content_model.items[0]
+        other_index = window.grid.model().index(1)
+        other_movie = other_index.data(Qt.ItemDataRole.UserRole)
+        other_rect = window.grid.visualRect(other_index)
+        card_position = other_rect.topLeft() + QPoint(45, 35)
+        selected_before = window.grid.currentIndex()
+        window.open_content(movie)
+        dismiss_at(window, window.grid.viewport(), card_position)
+        assert window.grid.currentIndex() == selected_before and window.current_tab == "movie"
+        click_visible(window.grid.viewport(), card_position)
+        assert window.detail_dialog.item.uid == other_movie.uid
+        QTest.keyClick(window.detail_dialog, Qt.Key.Key_Escape)
+        assert window.detail_dialog is None
+
+        # Favorite hearts react on release, so both halves of the click must be blocked.
+        card = window.grid.visualRect(window.grid.model().index(0)).adjusted(2, 2, -8, -8)
+        heart_position = card.topRight() + QPoint(-22, 22)
+        favorite_before = controller.library.is_favorite(movie)
+        window.open_content(movie)
+        dismiss_at(window, window.grid.viewport(), heart_position)
+        assert controller.library.is_favorite(movie) == favorite_before
+
+        category_before = window.categories.currentRow()
+        category_position = window.categories.visualItemRect(window.categories.item(1)).center()
+        window.open_content(movie)
+        dismiss_at(window, window.categories.viewport(), category_position)
+        assert window.categories.currentRow() == category_before
+        click_visible(window.categories.viewport(), category_position)
+        assert window.categories.currentRow() == 1
+
         # The Home wheel always scrolls the page, including over a row's scrollbar.
         window.navigate("home")
         app.processEvents()
@@ -132,7 +191,7 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v110-") as directory:
         assert horizontal.value() == 100
         screenshot(window, "inicio")
 
-        # The very click that dismisses details also opens the requested sidebar tab.
+        # A sidebar click first closes details; only the next click changes tabs.
         window.navigate("series")
         series = window.grid.content_model.items[0]
         window.open_content(series)
@@ -145,7 +204,9 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v110-") as directory:
         QTest.keyClick(detail.seasons, Qt.Key.Key_Return)
         assert window.detail_dialog is detail
         screenshot(window, "detalhes")
-        QTest.mouseClick(window.nav["settings"], Qt.MouseButton.LeftButton)
+        dismiss_at(window, window.nav["settings"])
+        assert window.current_tab == "series" and not window.nav["settings"].isChecked()
+        click_visible(window.nav["settings"])
         assert window.detail_dialog is None and window.current_tab == "settings"
         assert window.refresh.parentWidget() is not window.library_root
         assert window.pages.currentWidget() is window.settings_page
@@ -262,7 +323,7 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v110-") as directory:
         assert controller.browser is None and login.isVisible()
         assert not controller.sessions.path.exists()
         assert controller.library.auto_next_enabled
-        print("v1.1 checks passed: Home wheel, outside dismissal, account refresh, settings, embedded playback, catalog position, audio, subtitles, fullscreen, cross-season autoplay, last episode and cancellation.")
+        print("UI checks passed: outside clicks dismiss without activating cards, favorites, categories or sidebar; Home wheel, account refresh, settings, embedded playback, catalog position, audio, subtitles, fullscreen and autoplay.")
     finally:
         if controller.browser:
             controller.browser.close()

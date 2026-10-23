@@ -122,6 +122,7 @@ class DetailDialog(QFrame):
     def open(self):
         self._center()
         self.backdrop = DetailBackdrop(self.parentWidget())
+        self.backdrop.dismiss_requested.connect(self.reject)
         self.backdrop.show()
         self.backdrop.raise_()
         QApplication.instance().installEventFilter(self)
@@ -145,12 +146,6 @@ class DetailDialog(QFrame):
         if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape and not QApplication.activePopupWidget():
             self.reject()
             return True
-        if event.type() == QEvent.Type.MouseButtonPress and isinstance(watched, QWidget):
-            popup = QApplication.activePopupWidget()
-            if popup and (self.isAncestorOf(popup) or self.isAncestorOf(popup.parentWidget())):
-                return False
-            if watched is not self and not self.isAncestorOf(watched):
-                self.reject()
         return super().eventFilter(watched, event)
 
     def _finish(self, result):
