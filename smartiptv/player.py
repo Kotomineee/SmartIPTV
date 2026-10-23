@@ -4,8 +4,8 @@ import os
 from pathlib import Path
 
 import PySide6
-from PySide6.QtCore import QEvent, QLocale, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QActionGroup, QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, QLocale, QPoint, QRect, QTimer, QUrl, Qt, Signal
+from PySide6.QtGui import QActionGroup, QKeySequence, QShortcut, QWindow
 from PySide6.QtMultimedia import QAudioOutput, QMediaMetaData, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -53,7 +53,10 @@ class PlayerWidget(QWidget):
         self.fullscreen_state = None
         self.setObjectName("playerRoot")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.header = QWidget(self)
+        self.overlay = QWidget(self)
+        self.overlay.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.overlay.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.header = QWidget(self.overlay)
         self.header.setObjectName("playerOverlay")
         self.header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         heading = QHBoxLayout(self.header)
@@ -68,7 +71,7 @@ class PlayerWidget(QWidget):
         self.video = QVideoWidget(self)
         self.video.setMinimumSize(0, 0)
         self.video.setStyleSheet("background: #000;")
-        self.footer = QWidget(self)
+        self.footer = QWidget(self.overlay)
         self.footer.setObjectName("playerOverlay")
         self.footer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         layout = QVBoxLayout(self.footer)
@@ -201,19 +204,29 @@ class PlayerWidget(QWidget):
         self.footer.setGeometry(0, max(0, self.height() - bottom), self.width(), bottom)
         if self.fullscreen_state is not None:
             self.video.setGeometry(self.rect())
+            self.overlay.setGeometry(QRect(self.mapToGlobal(QPoint()), self.size()))
         else:
             self.video.setGeometry(22, top, max(0, self.width() - 44), max(0, self.height() - top - bottom))
+            self.overlay.setGeometry(self.rect())
         self.header.raise_()
         self.footer.raise_()
+        self.overlay.raise_()
 
     def eventFilter(self, watched, event):
         if self.closing:
             return False
         if watched in (self.header, self.footer) and event.type() == QEvent.Type.LayoutRequest:
             QTimer.singleShot(0, self._layout_video)
-        if self.fullscreen_state is not None and isinstance(watched, QWidget) and (watched is self or self.isAncestorOf(watched)):
-            if event.type() in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress,
-                                QEvent.Type.MouseButtonRelease, QEvent.Type.KeyPress, QEvent.Type.Wheel):
+        if self.fullscreen_state is not None and event.type() in (
+                QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress,
+                QEvent.Type.MouseButtonRelease, QEvent.Type.KeyPress, QEvent.Type.Wheel):
+            belongs = isinstance(watched, QWidget) and (watched is self or self.isAncestorOf(watched))
+            if isinstance(watched, QWindow):
+                handle = self.window().windowHandle()
+                belongs = bool(handle and (watched is handle or handle.isAncestorOf(watched)))
+                if belongs and hasattr(event, "globalPosition"):
+                    belongs = self.rect().contains(self.mapFromGlobal(event.globalPosition().toPoint()))
+            if belongs:
                 self._show_controls()
         return super().eventFilter(watched, event)
 
@@ -225,6 +238,8 @@ class PlayerWidget(QWidget):
         self.unsetCursor()
         self.video.unsetCursor()
         self._layout_video()
+        self.overlay.show()
+        self.overlay.raise_()
         if self.fullscreen_state is not None:
             self.hide_controls_timer.start()
 
@@ -237,6 +252,7 @@ class PlayerWidget(QWidget):
             return
         self.header.hide()
         self.footer.hide()
+        self.overlay.hide()
         self.setCursor(Qt.CursorShape.BlankCursor)
         self.video.setCursor(Qt.CursorShape.BlankCursor)
         self.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -437,6 +453,12 @@ class PlayerWidget(QWidget):
         else:
             self.fullscreen_state = window.windowState()
             window.showFullScreen()
+            # A native video window stacks above ordinary child widgets.
+            # An owned transparent tool window keeps the bars above it;
+            # its transparent center lets pointer input reach the video.
+            self.overlay.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
+                                        | Qt.WindowType.NoDropShadowWindowHint
+                                        | Qt.WindowType.WindowDoesNotAcceptFocus)
             self.fullscreen.setToolTip("Sair da tela cheia")
             self.fullscreen.setAccessibleName("Sair da tela cheia")
             self._show_controls()
@@ -446,6 +468,8 @@ class PlayerWidget(QWidget):
             previous_state = self.fullscreen_state
             self.fullscreen_state = None
             self.hide_controls_timer.stop()
+            self.overlay.hide()
+            self.overlay.setWindowFlags(Qt.WindowType.Widget)
             self.window().setWindowState(previous_state)
             self.fullscreen.setToolTip("Tela cheia")
             self.fullscreen.setAccessibleName("Tela cheia")
@@ -454,6 +478,7 @@ class PlayerWidget(QWidget):
             self.unsetCursor()
             self.video.unsetCursor()
             self._layout_video()
+            self.overlay.show()
 
     def escape(self):
         if self.fullscreen_state is not None:
@@ -469,6 +494,7 @@ class PlayerWidget(QWidget):
         self.hide_controls_timer.stop()
         self.flush_progress()
         self.leave_fullscreen()
+        self.overlay.hide()
         self.timer.stop()
         self.player.stop()
         self.player.setSource(QUrl())

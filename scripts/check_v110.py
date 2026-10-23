@@ -7,12 +7,13 @@ import faulthandler
 
 faulthandler.dump_traceback_later(30, repeat=True)
 
-os.environ["QT_QPA_PLATFORM"] = "offscreen"
+NATIVE_CHECK = os.environ.get("SMARTIPTV_NATIVE_CHECK") == "1"
+os.environ["QT_QPA_PLATFORM"] = "windows" if NATIVE_CHECK else "offscreen"
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from PySide6.QtCore import QEventLoop, QPoint, QPointF, Qt, QTimer
-from PySide6.QtGui import QFont, QFontDatabase, QWheelEvent
+from PySide6.QtCore import QEvent, QEventLoop, QPoint, QPointF, QRect, Qt, QTimer
+from PySide6.QtGui import QFont, QFontDatabase, QMouseEvent, QWheelEvent, QWindow
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QStyle, QStyleOptionComboBox, QWidget
@@ -64,6 +65,31 @@ def wheel(widget):
     app.processEvents()
 
 
+def check_native_bars(window, player):
+    if not NATIVE_CHECK:
+        return
+    # A widget grab omits the native video window and can falsely show bars
+    # that are actually covered. Inspect the desktop composition of this
+    # foreground fullscreen test window, including its decoded video.
+    assert window.isActiveWindow(), "Native test player is not in the foreground"
+    QTest.qWait(60)
+    screen = window.screen()
+    capture = screen.grabWindow(0)
+    directory = os.environ.get("SMARTIPTV_SCREENSHOT_DIR")
+    if directory:
+        capture.save(str(Path(directory) / f"SmartIPTV-{__version__}-player-restored.png"))
+    image = capture.toImage()
+    scale = capture.width() / screen.geometry().width()
+    for widget in (player.title_label, player.time_label):
+        origin = widget.mapToGlobal(QPoint()) - screen.geometry().topLeft()
+        rect = QRect(round(origin.x() * scale), round(origin.y() * scale),
+                     round(widget.width() * scale), round(widget.height() * scale))
+        region = image.copy(rect)
+        bright = sum(1 for y in range(region.height()) for x in range(region.width())
+                     if min(region.pixelColor(x, y).getRgb()[:3]) > 160)
+        assert bright > 10, f"Player title/controls are covered by the native video: {widget.objectName()}, {rect}, bright={bright}"
+
+
 def click_visible(widget, position=None):
     position = position if position is not None else widget.rect().center()
     global_position = widget.mapToGlobal(position)
@@ -111,7 +137,10 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v110-") as directory:
         real_play = window.play
         def play_for_headless(*args, **kwargs):
             real_play(*args, **kwargs)
-            headless_video(window.player_window)
+            if NATIVE_CHECK:
+                window.player_window.test_sink = window.player_window.video.videoSink()
+            else:
+                headless_video(window.player_window)
         window.play = play_for_headless
         wait_until(lambda: len(window.catalog["movie"]["items"]) == 80, "Catalog failed")
         wait_until(lambda: window.account_task is None, "Account refresh failed")
@@ -308,29 +337,64 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v110-") as directory:
         assert player.player.position() <= before + 500
         player.toggle_fullscreen()
         assert window.isFullScreen()
-        player.hide_controls_timer.setInterval(180)
+        player.hide_controls_timer.setInterval(600 if NATIVE_CHECK else 180)
         player.hide_controls_timer.start()
         wait_until(lambda: player.header.isHidden() and player.footer.isHidden(), "Fullscreen controls did not hide")
         assert player.video.geometry() == player.rect(), "Fullscreen video is inset"
         assert player.video.cursor().shape() == Qt.CursorShape.BlankCursor
+        unrelated = QWindow()
+        local = QPointF(90, 90)
+        global_position = QPointF(player.mapToGlobal(QPoint(90, 90)))
+        QApplication.sendEvent(unrelated, QMouseEvent(QEvent.Type.MouseMove, local, global_position,
+                                                     Qt.MouseButton.NoButton, Qt.MouseButton.NoButton,
+                                                     Qt.KeyboardModifier.NoModifier))
+        assert player.header.isHidden() and player.footer.isHidden(), "Unrelated window revealed controls"
+        unrelated.deleteLater()
+        # QVideoWidget embeds a native QWindow. Real pointer input can go to
+        # that surface without ever generating a QWidget mouse event.
+        video_surface = next(w for w in app.allWindows()
+                             if w.metaObject().className() == "QVideoWindow"
+                             and window.windowHandle().isAncestorOf(w))
+        QTest.mouseMove(video_surface, QPoint(90, 90))
+        wait_until(lambda: player.header.isVisible() and player.footer.isVisible(), "Native video mouse movement did not reveal controls", 1500)
+        assert all(widget.isVisible() for widget in (
+            player.back, player.title_label, player.pause, player.seek, player.volume,
+            player.audio_button, player.subtitle_button, player.fullscreen))
+        check_native_bars(window, player)
+        wait_until(lambda: player.footer.isHidden(), "Controls did not hide again")
         QTest.mouseMove(player.video, QPoint(35, 35))
         wait_until(lambda: player.header.isVisible() and player.footer.isVisible(), "Mouse did not reveal controls")
         assert player.video.geometry() == player.rect(), "Controls resized video"
         player.audio_menu.popup(player.audio_button.mapToGlobal(QPoint(0, 0)))
-        QTest.qWait(250)
+        QTest.qWait(player.hide_controls_timer.interval() + 70)
         assert player.footer.isVisible(), "Controls hid under the audio menu"
         player.audio_menu.close()
         wait_until(lambda: player.footer.isHidden(), "Controls stayed after closing audio menu")
         QTest.mouseMove(player.video, QPoint(55, 55))
         wait_until(lambda: player.footer.isVisible(), "Controls did not return")
         QTest.mousePress(player.volume, Qt.MouseButton.LeftButton, pos=player.volume.rect().center())
-        QTest.qWait(250)
+        QTest.qWait(player.hide_controls_timer.interval() + 70)
         assert player.footer.isVisible(), "Controls hid during volume drag"
         QTest.mouseRelease(player.volume, Qt.MouseButton.LeftButton, pos=player.volume.rect().center())
-        player.escape()
+        if not NATIVE_CHECK:
+            # The offscreen plugin has no window manager to honor the
+            # overlay's WindowDoesNotAcceptFocus flag like Windows does.
+            window.windowHandle().requestActivate()
+            app.processEvents()
+            player.setFocus()
+        QTest.keyClick(player, Qt.Key.Key_Space)
+        assert player.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        QTest.keyClick(player, Qt.Key.Key_Space)
+        assert player.player.playbackState() == QMediaPlayer.PlaybackState.PausedState
+        QTest.keyClick(player, Qt.Key.Key_F)
+        assert not window.isFullScreen() and not player.overlay.isWindow()
+        QTest.keyClick(player, Qt.Key.Key_F)
+        assert window.isFullScreen() and player.overlay.isWindow()
+        QTest.keyClick(player, Qt.Key.Key_Escape)
         assert not window.isFullScreen() and window.player_window is player
         assert player.header.isVisible() and player.footer.isVisible()
         assert not player.hide_controls_timer.isActive()
+        assert not player.overlay.isWindow(), "Floating controls were not restored to the player"
         assert player.video.cursor().shape() != Qt.CursorShape.BlankCursor
         app.processEvents()
         assert player.video.height() < player.height()
