@@ -3,6 +3,7 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QToolButton, QVBoxLayout, QWidget
 
 from .icons import icon
+from .backdrop import DetailBackdrop
 from .login import label
 from .player import timestamp
 from .theme import THEME
@@ -19,6 +20,7 @@ class DetailDialog(QFrame):
         self.task_id = None
         self.episodes = []
         self.dismissed = False
+        self.backdrop = None
         self.content_left = content_left
         self.setObjectName("detailPanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
@@ -57,14 +59,13 @@ class DetailDialog(QFrame):
         self.plot = label(item.plot or ("Carregando informações…" if item.kind in ("movie", "series") else "Transmissão ao vivo do seu provedor."), "body", True)
         self.plot.setMaximumHeight(155)
         info.addWidget(self.plot)
-        info.addStretch()
         self.favorite = QPushButton()
         self.favorite.setObjectName("secondary")
         self.favorite.clicked.connect(self._favorite)
-        info.addWidget(self.favorite, 0, Qt.AlignmentFlag.AlignLeft)
         top.addLayout(info, 1)
         layout.addLayout(top)
         self.feedback = label("", "muted", True)
+        self.feedback.setVisible(item.kind == "series")
         layout.addWidget(self.feedback)
         self.retry = QPushButton("Carregar novamente")
         self.retry.setObjectName("secondary")
@@ -85,25 +86,33 @@ class DetailDialog(QFrame):
             self.seasons.hide()
             self.episode_list.hide()
         buttons = QHBoxLayout()
-        buttons.addStretch()
+        buttons.setSpacing(10)
+        secondary = QHBoxLayout()
+        secondary.setSpacing(10)
         checkpoint = library.checkpoint(item)
         self.restart = QPushButton("Assistir do início")
         self.restart.setObjectName("secondary")
         self.restart.setVisible(bool(checkpoint) and item.kind != "series")
         self.restart.clicked.connect(lambda: self._play(self.item, True))
-        buttons.addWidget(self.restart)
+        secondary.addWidget(self.restart)
         self.resume = QPushButton("Continuar episódio")
         self.resume.setObjectName("secondary")
         self.resume.setVisible(item.kind == "series" and bool(checkpoint))
         self.resume.clicked.connect(lambda: self._play(checkpoint["item"]))
-        buttons.addWidget(self.resume)
+        secondary.addWidget(self.resume)
         self.watch = QPushButton("Assistir episódio" if item.kind == "series" else "Continuar assistindo" if checkpoint else "Assistir agora")
         self.watch.setObjectName("submit")
         self.watch.setIcon(icon("play", "#08231a"))
         self.watch.setEnabled(item.kind != "series")
         self.watch.clicked.connect(self._play_selected)
         buttons.addWidget(self.watch)
-        layout.addLayout(buttons)
+        self.favorite.setMinimumHeight(self.watch.sizeHint().height())
+        buttons.addWidget(self.favorite)
+        buttons.addStretch()
+        info.addLayout(buttons)
+        secondary.addStretch()
+        info.addLayout(secondary)
+        info.addStretch()
         self._update_favorite()
         artwork.changed.connect(self._update_artwork)
         self._update_artwork()
@@ -112,6 +121,9 @@ class DetailDialog(QFrame):
 
     def open(self):
         self._center()
+        self.backdrop = DetailBackdrop(self.parentWidget())
+        self.backdrop.show()
+        self.backdrop.raise_()
         QApplication.instance().installEventFilter(self)
         self.show()
         self.raise_()
@@ -122,12 +134,17 @@ class DetailDialog(QFrame):
         if parent:
             available = parent.width() - self.content_left
             width = min(850, available - 32)
-            height = min(710 if self.item.kind == "series" else 560, parent.height() - 24)
+            height = min(710 if self.item.kind == "series" else max(390, self.sizeHint().height()), parent.height() - 24)
             self.setGeometry(self.content_left + (available - width) // 2, (parent.height() - height) // 2, width, height)
 
     def eventFilter(self, watched, event):
         if event.type() == QEvent.Type.Resize and watched is self.parentWidget():
             self._center()
+            if self.backdrop:
+                self.backdrop.setGeometry(self.parentWidget().rect())
+        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape and not QApplication.activePopupWidget():
+            self.reject()
+            return True
         if event.type() == QEvent.Type.MouseButtonPress and isinstance(watched, QWidget):
             popup = QApplication.activePopupWidget()
             if popup and (self.isAncestorOf(popup) or self.isAncestorOf(popup.parentWidget())):
@@ -142,6 +159,10 @@ class DetailDialog(QFrame):
         self.dismissed = True
         QApplication.instance().removeEventFilter(self)
         self.hide()
+        if self.backdrop:
+            self.backdrop.hide()
+            self.backdrop.deleteLater()
+            self.backdrop = None
         self.finished.emit(result)
 
     def accept(self):
@@ -188,9 +209,11 @@ class DetailDialog(QFrame):
         if not isinstance(info, dict):
             info = {}
         self.plot.setText(str(info.get("plot") or info.get("description") or self.item.plot or "Este título não possui sinopse informada pelo provedor.")[:1800])
+        self._center()
 
     def _movie_failed(self, _message):
         self.plot.setText(self.item.plot or "Informações adicionais indisponíveis. Você pode tentar reproduzir o conteúdo.")
+        self._center()
 
     def _series_loaded(self, payload):
         self.episodes = payload["episodes"]
@@ -229,6 +252,7 @@ class DetailDialog(QFrame):
 
     def _failed(self, message):
         self.feedback.setText(message)
+        self.feedback.show()
         self.retry.show()
 
     def _play_selected(self):

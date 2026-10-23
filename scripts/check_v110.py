@@ -15,8 +15,9 @@ from PySide6.QtCore import QEventLoop, QPoint, QPointF, Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase, QWheelEvent
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
 from smartiptv.app import Controller
+from smartiptv import __version__
 from tests.provider import Provider
 from tests.media import headless_video
 
@@ -52,7 +53,7 @@ def screenshot(window, name):
     directory = os.environ.get("SMARTIPTV_SCREENSHOT_DIR")
     if directory:
         app.processEvents()
-        assert window.grab().save(str(Path(directory) / f"SmartIPTV-1.1.0-{name}.png"))
+        assert window.grab().save(str(Path(directory) / f"SmartIPTV-{__version__}-{name}.png"))
 
 
 def wheel(widget):
@@ -92,6 +93,27 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v110-") as directory:
         provider.active_connections = "1"
         window.refresh_account()
         wait_until(lambda: "1 de 2" in window.account_connections.text(), "Active connections stale")
+
+        # Opening details blurs only the background; actions stay usable.
+        window.navigate("movie")
+        window.open_content(window.grid.content_model.items[0])
+        movie_detail = window.detail_dialog
+        wait_until(lambda: "Carregando" not in movie_detail.plot.text(), "Movie details failed")
+        assert movie_detail.backdrop.isVisible()
+        screenshot(window, "filme-detalhes")
+        QTest.mouseClick(movie_detail.favorite, Qt.MouseButton.LeftButton)
+        assert controller.library.is_favorite(movie_detail.item) and window.detail_dialog is movie_detail
+        QTest.mouseClick(movie_detail.favorite, Qt.MouseButton.LeftButton)
+        window.resize(1040, 700)
+        app.processEvents()
+        assert movie_detail.backdrop.geometry() == window.library_root.rect()
+        screenshot(window, "filme-detalhes-compacto")
+        QTest.mouseClick(movie_detail.watch, Qt.MouseButton.LeftButton)
+        assert window.detail_dialog is None and window.player_window is not None
+        assert not any(w.isVisible() for w in window.library_root.findChildren(QWidget, "detailsBackdrop"))
+        window.leave_player()
+        window.resize(1380, 900)
+        app.processEvents()
 
         # The Home wheel always scrolls the page, including over a row's scrollbar.
         window.navigate("home")

@@ -2,6 +2,7 @@ from .login import STYLE
 
 THEME = STYLE + """
 QFrame#detailPanel { background: #121d1a; border: 1px solid #426653; border-radius: 16px; }
+QFrame#accountSeparator { background: #2c4037; border: none; }
 QFrame#settingsCard { background: #121d1a; border: 1px solid #2b4337; border-radius: 13px; }
 QWidget#playerRoot { background: #070b0a; }
 QToolButton { background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 4px; }
