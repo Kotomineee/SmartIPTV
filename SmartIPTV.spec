@@ -6,7 +6,7 @@ a = Analysis(
     [str(root / "main.py")],
     pathex=[str(root)],
     binaries=[],
-    datas=[],
+    datas=[(str(root / "THIRD_PARTY_NOTICES.md"), ".")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

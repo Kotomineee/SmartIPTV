@@ -1,8 +1,8 @@
-from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton,
-    QSizePolicy, QToolButton, QVBoxLayout, QWidget,
+    QSizePolicy, QToolButton, QVBoxLayout, QWidget, QCheckBox,
 )
 
 from . import __version__
@@ -39,6 +39,11 @@ QPushButton#submit:focus { border: 2px solid #e3fff0; padding: 11px; }
 QLabel#notice { color: #9baba7; font-size: 12px; }
 QLabel#feedback { color: #f2aaa4; font-size: 12px; }
 QLabel#feedback[success="true"] { color: #80e6b9; }
+QCheckBox { color: #b7c9c3; font-size: 12px; spacing: 9px; background: transparent; }
+QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #4a6258; border-radius: 4px; background: #0d1416; }
+QCheckBox::indicator:checked { background: #65dfad; border: 4px solid #285842; }
+QCheckBox::indicator:focus { border-color: #e3fff0; }
+QPushButton:disabled { background: #2b4840; color: #97b8aa; border-color: #2b4840; }
 """
 
 
@@ -165,11 +170,13 @@ class ScreenArtwork(QWidget):
 
 
 class LoginWindow(QMainWindow):
+    login_requested = Signal(str, str, str, bool)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"SmartIPTV — {__version__}")
-        self.resize(1120, 780)
-        self.setMinimumSize(560, 760)
+        self.resize(1120, 820)
+        self.setMinimumSize(560, 800)
         root = QWidget()
         root.setObjectName("root")
         self.setCentralWidget(root)
@@ -232,6 +239,10 @@ class LoginWindow(QMainWindow):
             field.edit.textChanged.connect(lambda _text, f=field: self._clear_feedback(f))
             field.edit.returnPressed.connect(self.validate_form)
 
+        self.remember = QCheckBox("Manter conectado nesse computador")
+        self.remember.setAccessibleName("Manter conectado nesse computador")
+        form.addWidget(self.remember)
+        form.addSpacing(18)
         self.submit = QPushButton("Entrar")
         self.submit.setObjectName("submit")
         self.submit.setIcon(icon("arrow", "#08231a", 20))
@@ -251,7 +262,7 @@ class LoginWindow(QMainWindow):
         divider.setStyleSheet("background: #293634;")
         form.addWidget(divider)
         form.addSpacing(16)
-        form.addWidget(label("Versão inicial · A conexão com o provedor\nserá adicionada na próxima etapa.", "notice", True))
+        form.addWidget(label("Use os dados de acesso fornecidos pelo seu provedor.", "notice", True))
         body.addWidget(self.card, 1, Qt.AlignmentFlag.AlignVCenter)
         page.addLayout(body, 1)
         footer = QHBoxLayout()
@@ -262,7 +273,8 @@ class LoginWindow(QMainWindow):
         QWidget.setTabOrder(self.server.edit, self.username.edit)
         QWidget.setTabOrder(self.username.edit, self.password.edit)
         QWidget.setTabOrder(self.password.edit, self.password.reveal)
-        QWidget.setTabOrder(self.password.reveal, self.submit)
+        QWidget.setTabOrder(self.password.reveal, self.remember)
+        QWidget.setTabOrder(self.remember, self.submit)
         self.server.edit.setFocus()
 
     def resizeEvent(self, event):
@@ -274,6 +286,8 @@ class LoginWindow(QMainWindow):
         self.feedback.clear()
 
     def validate_form(self) -> bool:
+        if not self.submit.isEnabled():
+            return False
         errors = [
             (self.server, server_error(self.server.edit.text())),
             (self.username, None if self.username.edit.text().strip() else "Informe seu usuário."),
@@ -282,7 +296,7 @@ class LoginWindow(QMainWindow):
         for field, error in errors:
             field.set_state("invalid", bool(error))
         first = next(((field, error) for field, error in errors if error), None)
-        self.feedback.setProperty("success", first is None)
+        self.feedback.setProperty("success", False)
         self.feedback.style().unpolish(self.feedback)
         self.feedback.style().polish(self.feedback)
         if first:
@@ -290,5 +304,24 @@ class LoginWindow(QMainWindow):
             self.feedback.setText(message)
             field.edit.setFocus()
             return False
-        self.feedback.setText("Campos preenchidos. A autenticação estará disponível na próxima etapa.")
+        self.feedback.setText("Conectando ao servidor…")
+        self.login_requested.emit(self.server.edit.text().strip().rstrip("/"), self.username.edit.text().strip(), self.password.edit.text(), self.remember.isChecked())
         return True
+
+    def set_busy(self, busy):
+        self.submit.setEnabled(not busy)
+        self.submit.setText("Conectando…" if busy else "Entrar")
+        for field in (self.server, self.username, self.password):
+            field.setEnabled(not busy)
+        self.remember.setEnabled(not busy)
+
+    def show_error(self, message):
+        self.set_busy(False)
+        self.feedback.setProperty("success", False)
+        self.feedback.setText(message)
+
+    def fill_session(self, credentials):
+        self.server.edit.setText(credentials.server)
+        self.username.edit.setText(credentials.username)
+        self.password.edit.setText(credentials.password)
+        self.remember.setChecked(True)
