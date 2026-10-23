@@ -1,10 +1,10 @@
 """Virtualized content cards and asynchronous, bounded poster caching."""
 from collections import OrderedDict
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, QObject, QRect, QRectF, QSize, Qt, QUrl, Signal
+from PySide6.QtCore import QAbstractListModel, QEvent, QModelIndex, QObject, QRect, QRectF, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkDiskCache, QNetworkReply, QNetworkRequest
-from PySide6.QtWidgets import QAbstractItemView, QListView, QMenu, QStyledItemDelegate, QStyle
+from PySide6.QtWidgets import QAbstractItemView, QListView, QMenu, QScrollArea, QStyledItemDelegate, QStyle
 
 from .icons import icon
 from .storage import data_directory
@@ -175,6 +175,7 @@ class Gallery(QListView):
     def __init__(self, library, artwork, compact=False, horizontal=False, parent=None):
         super().__init__(parent)
         self.library = library
+        self.horizontal = horizontal
         self.setObjectName("gallery")
         self.content_model = ContentModel(self)
         self.setModel(self.content_model)
@@ -189,6 +190,7 @@ class Gallery(QListView):
         self.setGridSize(QSize(182, 177 if compact else 300))
         self.setSpacing(4)
         if horizontal:
+            self.horizontalScrollBar().installEventFilter(self)
             self.setFlow(QListView.Flow.LeftToRight)
             self.setWrapping(False)
             self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -197,6 +199,29 @@ class Gallery(QListView):
         self.clicked.connect(lambda index: self.open_requested.emit(index.data(Qt.ItemDataRole.UserRole)))
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._context_menu)
+
+    def _scroll_page(self, event):
+        parent = self.parentWidget()
+        while parent is not None and not isinstance(parent, QScrollArea):
+            parent = parent.parentWidget()
+        if parent is not None:
+            bar = parent.verticalScrollBar()
+            pixels = event.pixelDelta().y()
+            delta = pixels if pixels else event.angleDelta().y() / 120 * bar.singleStep() * 3
+            bar.setValue(round(bar.value() - delta))
+        event.accept()
+
+    def wheelEvent(self, event):
+        if self.horizontal:
+            self._scroll_page(event)
+        else:
+            super().wheelEvent(event)
+
+    def eventFilter(self, watched, event):
+        if self.horizontal and watched is self.horizontalScrollBar() and event.type() == QEvent.Type.Wheel:
+            self._scroll_page(event)
+            return True
+        return super().eventFilter(watched, event)
 
     def set_items(self, items):
         self.content_model.set_items(items)

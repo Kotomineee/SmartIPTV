@@ -1,6 +1,6 @@
-from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtCore import QEvent, Qt, QSize, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QComboBox, QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QToolButton, QVBoxLayout, QWidget
 
 from .icons import icon
 from .login import label
@@ -8,15 +8,21 @@ from .player import timestamp
 from .theme import THEME
 
 
-class DetailDialog(QDialog):
-    play_requested = Signal(object, bool)
+class DetailDialog(QFrame):
+    play_requested = Signal(object, bool, object)
     favorite_requested = Signal(object)
+    finished = Signal(int)
 
-    def __init__(self, item, client, library, tasks, artwork, parent=None):
+    def __init__(self, item, client, library, tasks, artwork, parent=None, content_left=0):
         super().__init__(parent)
         self.item, self.client, self.library, self.tasks, self.artwork = item, client, library, tasks, artwork
         self.task_id = None
         self.episodes = []
+        self.dismissed = False
+        self.content_left = content_left
+        self.setObjectName("detailPanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setWindowTitle(item.name)
         self.setStyleSheet(THEME)
         self.resize(850, 660 if item.kind == "series" else 530)
@@ -24,6 +30,15 @@ class DetailDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 26, 28, 26)
         layout.setSpacing(18)
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+        close = QToolButton()
+        close.setIcon(icon("close", "#b7c9c3"))
+        close.setToolTip("Fechar detalhes")
+        close.setAccessibleName("Fechar detalhes")
+        close.clicked.connect(self.reject)
+        close_row.addWidget(close)
+        layout.addLayout(close_row)
         top = QHBoxLayout()
         top.setSpacing(26)
         self.poster = QLabel()
@@ -70,10 +85,6 @@ class DetailDialog(QDialog):
             self.seasons.hide()
             self.episode_list.hide()
         buttons = QHBoxLayout()
-        close = QPushButton("Voltar")
-        close.setObjectName("secondary")
-        close.clicked.connect(self.reject)
-        buttons.addWidget(close)
         buttons.addStretch()
         checkpoint = library.checkpoint(item)
         self.restart = QPushButton("Assistir do início")
@@ -98,6 +109,56 @@ class DetailDialog(QDialog):
         self._update_artwork()
         self._load()
         self.finished.connect(self._cancel)
+
+    def open(self):
+        self._center()
+        QApplication.instance().installEventFilter(self)
+        self.show()
+        self.raise_()
+        self.setFocus()
+
+    def _center(self):
+        parent = self.parentWidget()
+        if parent:
+            available = parent.width() - self.content_left
+            width = min(850, available - 32)
+            height = min(710 if self.item.kind == "series" else 560, parent.height() - 24)
+            self.setGeometry(self.content_left + (available - width) // 2, (parent.height() - height) // 2, width, height)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Resize and watched is self.parentWidget():
+            self._center()
+        if event.type() == QEvent.Type.MouseButtonPress and isinstance(watched, QWidget):
+            popup = QApplication.activePopupWidget()
+            if popup and (self.isAncestorOf(popup) or self.isAncestorOf(popup.parentWidget())):
+                return False
+            if watched is not self and not self.isAncestorOf(watched):
+                self.reject()
+        return super().eventFilter(watched, event)
+
+    def _finish(self, result):
+        if self.dismissed:
+            return
+        self.dismissed = True
+        QApplication.instance().removeEventFilter(self)
+        self.hide()
+        self.finished.emit(result)
+
+    def accept(self):
+        self._finish(1)
+
+    def reject(self):
+        self._finish(0)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.reject()
+        else:
+            super().keyPressEvent(event)
+
+    def closeEvent(self, event):
+        self.reject()
+        super().closeEvent(event)
 
     def _update_artwork(self):
         pixmap = self.artwork.get(self.item.artwork)
@@ -178,7 +239,7 @@ class DetailDialog(QDialog):
 
     def _play(self, item, restart=False):
         self.accept()
-        self.play_requested.emit(item, restart)
+        self.play_requested.emit(item, restart, self.episodes)
 
     def _cancel(self, _result=None):
         if self.task_id:

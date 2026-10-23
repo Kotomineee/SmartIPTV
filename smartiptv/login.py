@@ -41,8 +41,9 @@ QLabel#feedback { color: #f2aaa4; font-size: 12px; }
 QLabel#feedback[success="true"] { color: #80e6b9; }
 QCheckBox { color: #b7c9c3; font-size: 12px; spacing: 9px; background: transparent; }
 QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #4a6258; border-radius: 4px; background: #0d1416; }
-QCheckBox::indicator:checked { background: #65dfad; border: 4px solid #285842; }
-QCheckBox::indicator:focus { border-color: #e3fff0; }
+QCheckBox::indicator:checked { background: #65dfad; border: 1px solid #65dfad; }
+QCheckBox::indicator:focus { border-color: #65dfad; }
+QCheckBox:focus { outline: none; color: #65dfad; }
 QPushButton:disabled { background: #2b4840; color: #97b8aa; border-color: #2b4840; }
 """
 
@@ -223,7 +224,7 @@ class LoginWindow(QMainWindow):
         form.addWidget(label("Preencha os dados do seu provedor.", "muted", True))
         form.addSpacing(24)
 
-        self.server = InputField("Servidor", "http://seu-servidor.com:porta", "server")
+        self.server = InputField("Servidor", "", "server")
         self.username = InputField("Usuário", "Seu usuário", "user")
         self.password = InputField("Senha", "Sua senha", "lock", password=True)
         for caption, field in [("Servidor", self.server), ("Usuário", self.username), ("Senha", self.password)]:
@@ -232,9 +233,6 @@ class LoginWindow(QMainWindow):
             form.addWidget(heading)
             form.addSpacing(8)
             form.addWidget(field)
-            if field is self.server:
-                form.addSpacing(7)
-                form.addWidget(label("Endereço do servidor, incluindo a porta se houver.", "helper", True))
             form.addSpacing(16)
             field.edit.textChanged.connect(lambda _text, f=field: self._clear_feedback(f))
             field.edit.returnPressed.connect(self.validate_form)
@@ -265,11 +263,6 @@ class LoginWindow(QMainWindow):
         form.addWidget(label("Use os dados de acesso fornecidos pelo seu provedor.", "notice", True))
         body.addWidget(self.card, 1, Qt.AlignmentFlag.AlignVCenter)
         page.addLayout(body, 1)
-        footer = QHBoxLayout()
-        footer.addWidget(label("SMARTIPTV  /  DESKTOP", "version"))
-        footer.addStretch()
-        footer.addWidget(label("Feito para a sua playlist.", "version"))
-        page.addLayout(footer)
         QWidget.setTabOrder(self.server.edit, self.username.edit)
         QWidget.setTabOrder(self.username.edit, self.password.edit)
         QWidget.setTabOrder(self.password.edit, self.password.reveal)

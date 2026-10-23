@@ -5,6 +5,14 @@ from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 PATHS = {
+    "settings": '<path d="m9 3-1 3-3 1-2 4 2 2v4l4 3 3-1 3 1 4-3v-4l2-2-2-4-3-1-1-3Z"/><circle cx="12" cy="12" r="3"/>',
+    "close": '<path d="m6 6 12 12M18 6 6 18"/>',
+    "rewind": '<path d="M4 9a8 8 0 1 1 0 7M4 3v6h6"/><text x="8" y="15" font-size="7" fill="currentColor" stroke-width=".4">10</text>',
+    "forward": '<path d="M20 9a8 8 0 1 0 0 7M20 3v6h-6"/><text x="8" y="15" font-size="7" fill="currentColor" stroke-width=".4">10</text>',
+    "volume": '<path d="M4 9h4l5-4v14l-5-4H4ZM17 8a6 6 0 0 1 0 8M20 5a10 10 0 0 1 0 14"/>',
+    "muted": '<path d="M4 9h4l5-4v14l-5-4H4ZM17 9l5 6m0-6-5 6"/>',
+    "music": '<path d="M10 17V5l10-2v12M10 8l10-2"/><ellipse cx="6" cy="18" rx="4" ry="3"/><ellipse cx="16" cy="16" rx="4" ry="3"/>',
+    "subtitles": '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M10 10a3 3 0 1 0 0 4m9-4a3 3 0 1 0 0 4"/>',
     "heart-filled": '<path fill="#74edb0" d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0l-1 1-1-1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/>',
     "home": '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/>',
     "film": '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 3v18M17 3v18M3 8h4m-4 8h4M17 8h4m-4 8h4"/>',

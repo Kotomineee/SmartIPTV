@@ -10,6 +10,9 @@ class Provider:
     def __init__(self, media_file=None):
         self.media_file = Path(media_file) if media_file else None
         self.bad_catalog = False
+        self.active_connections = "0"
+        self.media_requests = []
+        self.failed_media = set()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -18,7 +21,11 @@ class Provider:
 
             def do_GET(self):
                 path = urlsplit(self.path)
-                if path.path == "/sample.mp4" and owner.media_file:
+                if path.path.rsplit("/", 1)[-1] in owner.failed_media:
+                    self.send_error(503)
+                    return
+                if owner.media_file and (path.path == "/sample.mp4" or path.path.startswith(("/movie/demo/demopass/", "/series/demo/demopass/"))):
+                    owner.media_requests.append(path.path.rsplit("/", 1)[-1])
                     raw = owner.media_file.read_bytes()
                     start, end = 0, len(raw) - 1
                     range_value = self.headers.get("Range")
@@ -71,7 +78,7 @@ class Provider:
 
     def payload(self, action):
         if not action:
-            return {"user_info": {"auth": 1, "status": "Active", "max_connections": "1", "allowed_output_formats": ["ts", "m3u8"]}}
+            return {"user_info": {"auth": 1, "status": "Active", "active_cons": self.active_connections, "max_connections": "2", "exp_date": "1893456000", "allowed_output_formats": ["ts", "m3u8"]}}
         if action.endswith("_categories"):
             names = {"get_live_categories": ("CANAIS | ABERTOS", "CANAIS | NOTÍCIAS"), "get_vod_categories": ("FILMES | LANÇAMENTOS", "FILMES | AVENTURA"), "get_series_categories": ("SÉRIES | DRAMA", "SÉRIES | DOCUMENTÁRIOS")}[action]
             return [{"category_id": str(i + 1), "category_name": name, "parent_id": 0} for i, name in enumerate(names)]

@@ -65,7 +65,7 @@ class XtreamClient:
         payload = self.request()
         if not isinstance(payload, dict) or not isinstance(payload.get("user_info"), dict):
             raise ProviderError("Não foi possível confirmar a autenticação Xtream.")
-        self.account = {k: payload["user_info"].get(k) for k in ("status", "max_connections", "exp_date", "allowed_output_formats")}
+        self.account = {k: payload["user_info"].get(k) for k in ("status", "active_cons", "max_connections", "exp_date", "allowed_output_formats")}
         return self.account
 
     def _section(self, kind, categories_action, items_action):

@@ -8,23 +8,32 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from PySide6.QtCore import QPoint, Qt, QUrl
+from PySide6.QtCore import QEventLoop, QPoint, Qt, QTimer, QUrl
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLineEdit
 from smartiptv.app import Controller
 from smartiptv.models import Content
-from smartiptv.player import PlayerWindow
 from tests.provider import Provider
+from tests.media import headless_video
 
 
 def wait_until(condition, description, timeout=12000):
-    for _ in range(timeout // 30):
-        app.processEvents()
-        if condition():
-            return
-        QTest.qWait(30)
-    raise AssertionError(description)
+    if condition():
+        return
+    loop = QEventLoop()
+    poll = QTimer()
+    poll.setInterval(30)
+    poll.timeout.connect(lambda: loop.quit() if condition() else None)
+    deadline = QTimer()
+    deadline.setSingleShot(True)
+    deadline.timeout.connect(loop.quit)
+    poll.start()
+    deadline.start(timeout)
+    loop.exec()
+    poll.stop()
+    deadline.stop()
+    assert condition(), description
 
 
 def screenshot(window, name):
@@ -54,7 +63,7 @@ try:
     assert all(not f.edit.text() for f in (login.server, login.username, login.password))
     assert not login.remember.isChecked()
     assert login.password.edit.echoMode() == QLineEdit.EchoMode.Password
-    screenshot(login, "SmartIPTV-1.0.0-login.png")
+    screenshot(login, "SmartIPTV-1.1.0-login.png")
     QTest.mouseClick(login.submit, Qt.MouseButton.LeftButton)
     assert login.server.edit.hasFocus() and "endereço" in login.feedback.text()
     login.server.edit.setText(provider.url)
@@ -79,7 +88,7 @@ try:
     wait_until(lambda: len(window.catalog["movie"]["items"]) == 80, "Catalog did not load")
     assert not login.isVisible()
     assert controller.sessions.load().password == "demopass"
-    screenshot(window, "SmartIPTV-1.0.0-inicio.png")
+    screenshot(window, "SmartIPTV-1.1.0-inicio.png")
     for tab in ("live", "movie", "series"):
         QTest.mouseClick(window.nav[tab], Qt.MouseButton.LeftButton)
         assert window.current_tab == tab and window.categories.count() == 3
@@ -92,7 +101,7 @@ try:
     assert window.grid.content_model.items
     window.search.clear()
     QTest.qWait(250)
-    screenshot(window, "SmartIPTV-1.0.0-filmes.png")
+    screenshot(window, "SmartIPTV-1.1.0-filmes.png")
     index = window.grid.model().index(0)
     item = index.data(Qt.ItemDataRole.UserRole)
     card = window.grid.visualRect(index).adjusted(2, 2, -8, -8)
@@ -110,13 +119,13 @@ try:
     assert detail.episode_list.count() == 3
     episode = detail.episode_list.item(1).data(Qt.ItemDataRole.UserRole)
     assert episode.season == 2 and episode.episode == 2
-    screenshot(detail, "SmartIPTV-1.0.0-serie.png")
+    screenshot(detail, "SmartIPTV-1.1.0-serie.png")
     detail.reject()
     app.processEvents()
     controller.library.record_progress(episode, 300000, 1200000)
     window.navigate("continue")
     assert window.grid.content_model.items[0].uid == episode.uid
-    screenshot(window, "SmartIPTV-1.0.0-continuar.png")
+    screenshot(window, "SmartIPTV-1.1.0-continuar.png")
     controller.library.record_progress(episode, 1200000, 1200000, True)
     window.library_updated()
     assert not window.grid.content_model.items
@@ -124,7 +133,9 @@ try:
     fixture = ROOT / "tests" / "assets" / "resume.mp4"
     assert fixture.exists(), "Synthetic media fixture is missing"
     movie = Content("movie", "fixture", "Verificação local do reprodutor")
-    player = PlayerWindow(window.client, controller.library, movie, parent=window, source_override=QUrl.fromLocalFile(str(fixture)).toString())
+    window.play(movie, source_override=QUrl.fromLocalFile(str(fixture)).toString())
+    player = window.player_window
+    headless_video(player)
     player.audio.setMuted(True)
     player.show()
     wait_until(lambda: player.player.position() >= 1300, "Local video failed to start", 15000)
@@ -132,18 +143,18 @@ try:
     player.player.pause()
     player.flush_progress()
     assert controller.library.checkpoint(movie)["position"] >= 1000
-    player.close()
-    player.deleteLater()
+    window.leave_player()
     controller.library.record_progress(movie, 7000, 20000)
-    resumed = PlayerWindow(window.client, controller.library, movie, parent=window, source_override=QUrl.fromLocalFile(str(fixture)).toString())
+    window.play(movie, source_override=QUrl.fromLocalFile(str(fixture)).toString())
+    resumed = window.player_window
+    headless_video(resumed)
     resumed.audio.setMuted(True)
     resumed.show()
     wait_until(lambda: resumed.player.position() >= 7000 and not resumed.pending_resume, "Video did not resume", 15000)
     resumed.player.setPosition(resumed.player.duration() - 500)
     wait_until(lambda: resumed.finished, "Video completion not detected", 5000)
     assert controller.library.checkpoint(movie) is None
-    resumed.close()
-    resumed.deleteLater()
+    window.leave_player()
 
     window.close()
     login.close()

@@ -23,7 +23,11 @@ class ClientTests(unittest.TestCase):
         return XtreamClient(Credentials(self.provider.url, username, password))
 
     def test_valid_login(self):
-        self.assertEqual(self.client().authenticate()["status"], "Active")
+        account = self.client().authenticate()
+        self.assertEqual(account["status"], "Active")
+        self.assertEqual(account["active_cons"], "0")
+        self.assertEqual(account["max_connections"], "2")
+        self.assertEqual(account["exp_date"], "1893456000")
 
     def test_rejected_login_does_not_echo_credentials(self):
         with self.assertRaises(ProviderError) as error:
@@ -83,6 +87,17 @@ class LibraryTests(unittest.TestCase):
         self.library.select_account(self.credentials)
         self.assertTrue(self.library.is_favorite(self.movie))
         self.assertFalse(self.library.toggle_favorite(self.movie))
+
+    def test_playback_preference_survives_restart_and_account_change(self):
+        self.assertFalse(self.library.auto_next_enabled)
+        self.library.set_auto_next(True)
+        self.library.close()
+        self.library = Library(self.directory.name)
+        self.assertTrue(self.library.auto_next_enabled)
+        self.library.select_account(Credentials("http://example.com", "another-user", "pass"))
+        self.assertTrue(self.library.auto_next_enabled)
+        self.library.set_auto_next(False)
+        self.assertFalse(self.library.auto_next_enabled)
 
     def test_accounts_are_isolated(self):
         self.library.toggle_favorite(self.movie)

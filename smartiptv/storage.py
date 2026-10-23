@@ -78,12 +78,22 @@ class Library:
         directory.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(directory / "library.sqlite3")
         self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS favorites (account TEXT, uid TEXT, item TEXT NOT NULL, updated REAL NOT NULL, PRIMARY KEY(account,uid))")
         self.db.execute("CREATE TABLE IF NOT EXISTS progress (account TEXT, uid TEXT, item TEXT NOT NULL, position INTEGER NOT NULL, duration INTEGER NOT NULL, finished INTEGER NOT NULL, updated REAL NOT NULL, PRIMARY KEY(account,uid))")
         self.db.commit()
         self.account = ""
         self.favorites = {}
         self.progress = {}
+
+    @property
+    def auto_next_enabled(self):
+        row = self.db.execute("SELECT value FROM settings WHERE key='auto_next'").fetchone()
+        return bool(row and row[0] == "true")
+
+    def set_auto_next(self, enabled):
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO settings VALUES ('auto_next', ?)", ("true" if enabled else "false",))
 
     def select_account(self, credentials):
         self.account = account_key(credentials)

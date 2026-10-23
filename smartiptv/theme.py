@@ -1,6 +1,17 @@
 from .login import STYLE
 
 THEME = STYLE + """
+QFrame#detailPanel { background: #121d1a; border: 1px solid #426653; border-radius: 16px; }
+QFrame#settingsCard { background: #121d1a; border: 1px solid #2b4337; border-radius: 13px; }
+QWidget#playerRoot { background: #070b0a; }
+QToolButton { background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 4px; }
+QToolButton:hover, QToolButton:focus { background: #203b30; border-color: #559d79; }
+QToolButton::menu-indicator { image: none; }
+QLabel#playerTime { color: #c5d8d1; font-size: 12px; }
+QMenu { background: #14221b; color: #e0eee4; border: 1px solid #426653; padding: 6px; }
+QMenu::item { padding: 9px 26px; border-radius: 5px; }
+QMenu::item:selected { background: #285640; }
+QMenu::item:disabled { color: #7e9387; }
 QMainWindow, QDialog, QWidget#libraryRoot { background: #0b1011; }
 QFrame#sidebar { background: #101819; border-right: 1px solid #25312e; }
 QPushButton#nav { color: #99aaa4; border: none; border-radius: 8px; background: transparent; text-align: left; padding: 13px 14px; font-size: 13px; }
