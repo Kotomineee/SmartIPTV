@@ -225,6 +225,8 @@ class BrowserWindow(QMainWindow):
         tools.addWidget(self.result_count)
         tools.addStretch()
         self.sort = QComboBox()
+        self.sort.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.sort.setMinimumWidth(self.sort.fontMetrics().horizontalAdvance("Assistidos recentemente") + 58)
         self.sort.addItems(["Mais recentes", "Nome A–Z"])
         self.sort.setAccessibleName("Ordenação do catálogo")
         self.sort.currentIndexChanged.connect(lambda _index: self.render())

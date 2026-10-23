@@ -15,7 +15,7 @@ from PySide6.QtCore import QEventLoop, QPoint, QPointF, Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase, QWheelEvent
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QStyle, QStyleOptionComboBox, QWidget
 from smartiptv.app import Controller
 from smartiptv import __version__
 from tests.provider import Provider
@@ -199,9 +199,14 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v110-") as directory:
         wait_until(lambda: detail.watch.isEnabled(), "Episode list failed")
         assert not detail.isWindow()
         episodes = list(detail.episodes)
-        QTest.mouseClick(detail.seasons, Qt.MouseButton.LeftButton)
-        QTest.keyClick(detail.seasons, Qt.Key.Key_Down)
-        QTest.keyClick(detail.seasons, Qt.Key.Key_Return)
+        assert list(detail.seasons.buttons) == [1, 2]
+        assert "2 temporadas" in detail.caption.text()
+        assert not detail.feedback.isVisible() and "episódios disponíveis" not in detail.feedback.text()
+        assert all(button.isVisible() for button in detail.seasons.buttons.values())
+        QTest.mouseClick(detail.seasons.buttons[2], Qt.MouseButton.LeftButton)
+        assert detail.seasons.current_season() == 2
+        assert detail.episode_list.count() == 3
+        assert all(detail.episode_list.item(i).data(Qt.ItemDataRole.UserRole).season == 2 for i in range(3))
         assert window.detail_dialog is detail
         screenshot(window, "detalhes")
         dismiss_at(window, window.nav["settings"])
@@ -212,6 +217,34 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v110-") as directory:
         assert window.pages.currentWidget() is window.settings_page
         assert not window.settings_page.auto_next.isChecked()
         QTest.mouseClick(window.settings_page.auto_next, Qt.MouseButton.LeftButton)
+
+        # A remembered episode selects its season; many seasons wrap visibly.
+        controller.library.record_progress(episodes[4], 5000, 20000)
+        window.open_content(series)
+        detail = window.detail_dialog
+        wait_until(lambda: detail.watch.isEnabled(), "Remembered series failed")
+        assert detail.seasons.current_season() == 2
+        assert detail.episode_list.currentItem().data(Qt.ItemDataRole.UserRole).uid == episodes[4].uid
+        assert "Continuar em" in detail.episode_list.currentItem().data(Qt.ItemDataRole.UserRole + 1)
+        detail.seasons.set_seasons(range(1, 25), 2)
+        app.processEvents()
+        assert all(detail.seasons.rect().contains(button.geometry()) for button in detail.seasons.buttons.values())
+        detail._series_loaded({"episodes": episodes[:3], "info": {}})
+        assert "1 temporada" in detail.caption.text() and "1 temporadas" not in detail.caption.text()
+        assert list(detail.seasons.buttons) == [1] and detail.seasons.current_season() == 1
+        detail._series_loaded({"episodes": [], "info": {}})
+        assert not detail.watch.isEnabled() and detail.episode_list.count() == 0
+        assert detail.feedback.isVisible() and not detail.seasons.buttons
+        detail.reject()
+        window.navigate("continue")
+        window.resize(1040, 700)
+        app.processEvents()
+        option = QStyleOptionComboBox()
+        window.sort.initStyleOption(option)
+        text_rect = window.sort.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, option, QStyle.SubControl.SC_ComboBoxEditField, window.sort)
+        assert text_rect.width() >= window.sort.fontMetrics().horizontalAdvance("Assistidos recentemente"), "Sort text clipped"
+        screenshot(window, "continuar")
+        window.resize(1380, 900)
         assert controller.library.auto_next_enabled
         screenshot(window, "configuracoes")
         QTest.mouseClick(window.settings_page.auto_next, Qt.MouseButton.LeftButton)
@@ -251,6 +284,23 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v110-") as directory:
         player.volume.setValue(25)
         assert abs(player.audio.volume() - .25) < .01
         player.toggle_pause()
+        # Clicks choose the actual point, rather than moving one page step.
+        for fraction in (.76, .23):
+            QTest.mouseClick(player.seek, Qt.MouseButton.LeftButton, pos=QPoint(round(player.seek.width() * fraction), player.seek.height() // 2))
+            assert abs(player.player.position() / player.player.duration() - fraction) < .035, "Timeline click inaccurate"
+        QTest.mousePress(player.seek, Qt.MouseButton.LeftButton, pos=QPoint(player.seek.width() // 3, player.seek.height() // 2))
+        QTest.mouseMove(player.seek, QPoint(player.seek.width() // 2, player.seek.height() // 2))
+        QTest.mouseRelease(player.seek, Qt.MouseButton.LeftButton, pos=QPoint(player.seek.width() // 2, player.seek.height() // 2))
+        assert abs(player.player.position() / player.player.duration() - .5) < .035, "Timeline drag broken"
+        QTest.mouseClick(player.volume, Qt.MouseButton.LeftButton, pos=QPoint(68, player.volume.height() // 2))
+        assert abs(player.audio.volume() - .79) < .04, "Forward volume click inaccurate"
+        QTest.mouseClick(player.volume, Qt.MouseButton.LeftButton, pos=QPoint(22, player.volume.height() // 2))
+        assert abs(player.audio.volume() - .21) < .04, "Volume click inaccurate"
+        QTest.mouseClick(player.volume, Qt.MouseButton.LeftButton, pos=QPoint(0, player.volume.height() // 2))
+        assert player.audio.volume() == 0
+        QTest.keyClick(player.volume, Qt.Key.Key_End)
+        assert player.audio.volume() == 1
+        player.volume.setValue(25)
         before = player.player.position()
         player.skip(10000)
         assert player.player.position() >= before + 9500
@@ -258,8 +308,32 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v110-") as directory:
         assert player.player.position() <= before + 500
         player.toggle_fullscreen()
         assert window.isFullScreen()
+        player.hide_controls_timer.setInterval(180)
+        player.hide_controls_timer.start()
+        wait_until(lambda: player.header.isHidden() and player.footer.isHidden(), "Fullscreen controls did not hide")
+        assert player.video.geometry() == player.rect(), "Fullscreen video is inset"
+        assert player.video.cursor().shape() == Qt.CursorShape.BlankCursor
+        QTest.mouseMove(player.video, QPoint(35, 35))
+        wait_until(lambda: player.header.isVisible() and player.footer.isVisible(), "Mouse did not reveal controls")
+        assert player.video.geometry() == player.rect(), "Controls resized video"
+        player.audio_menu.popup(player.audio_button.mapToGlobal(QPoint(0, 0)))
+        QTest.qWait(250)
+        assert player.footer.isVisible(), "Controls hid under the audio menu"
+        player.audio_menu.close()
+        wait_until(lambda: player.footer.isHidden(), "Controls stayed after closing audio menu")
+        QTest.mouseMove(player.video, QPoint(55, 55))
+        wait_until(lambda: player.footer.isVisible(), "Controls did not return")
+        QTest.mousePress(player.volume, Qt.MouseButton.LeftButton, pos=player.volume.rect().center())
+        QTest.qWait(250)
+        assert player.footer.isVisible(), "Controls hid during volume drag"
+        QTest.mouseRelease(player.volume, Qt.MouseButton.LeftButton, pos=player.volume.rect().center())
         player.escape()
         assert not window.isFullScreen() and window.player_window is player
+        assert player.header.isVisible() and player.footer.isVisible()
+        assert not player.hide_controls_timer.isActive()
+        assert player.video.cursor().shape() != Qt.CursorShape.BlankCursor
+        app.processEvents()
+        assert player.video.height() < player.height()
         player.escape()
         app.processEvents()
         assert window.player_window is None and window.window_pages.currentWidget() is window.library_root
@@ -282,8 +356,10 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v110-") as directory:
         assert window.player_window is current
         controller.library.set_auto_next(True)
         window.play(episodes[2], True, episodes)
+        window.player_window.toggle_fullscreen()
         end_current()
         wait_until(lambda: window.player_window.item.uid == episodes[3].uid, "Next season did not start")
+        assert window.isFullScreen() and window.player_window.fullscreen_state is not None
         assert controller.library.progress[episodes[2].uid]["finished"]
         end_current()
         wait_until(lambda: window.player_window.item.uid == episodes[4].uid, "Next episode did not start")
@@ -323,7 +399,7 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v110-") as directory:
         assert controller.browser is None and login.isVisible()
         assert not controller.sessions.path.exists()
         assert controller.library.auto_next_enabled
-        print("UI checks passed: outside clicks dismiss without activating cards, favorites, categories or sidebar; Home wheel, account refresh, settings, embedded playback, catalog position, audio, subtitles, fullscreen and autoplay.")
+        print("UI checks passed: visible season tabs, episode resume, season count, complete sort text, click/drag seeking and volume, fullscreen overlays and idle cursor, menu/drag visibility, outside-click isolation, audio, subtitles and cross-season autoplay.")
     finally:
         if controller.browser:
             controller.browser.close()

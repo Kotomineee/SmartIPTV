@@ -114,8 +114,8 @@ try:
     window.open_content(series)
     detail = window.detail_dialog
     wait_until(lambda: detail.watch.isEnabled(), "Series episodes did not load")
-    assert detail.seasons.count() == 2
-    detail.seasons.setCurrentIndex(1)
+    assert len(detail.seasons.buttons) == 2
+    QTest.mouseClick(detail.seasons.buttons[2], Qt.MouseButton.LeftButton)
     assert detail.episode_list.count() == 3
     episode = detail.episode_list.item(1).data(Qt.ItemDataRole.UserRole)
     assert episode.season == 2 and episode.episode == 2

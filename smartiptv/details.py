@@ -1,12 +1,13 @@
 from PySide6.QtCore import QEvent, Qt, QSize, Signal
-from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QToolButton, QVBoxLayout
 
 from .icons import icon
 from .backdrop import DetailBackdrop
 from .login import label
 from .player import timestamp
 from .theme import THEME
+from .season_tabs import SeasonTabs
+from .episode_delegate import EpisodeDelegate
 
 
 class DetailDialog(QFrame):
@@ -72,12 +73,14 @@ class DetailDialog(QFrame):
         self.retry.clicked.connect(self._load)
         self.retry.hide()
         layout.addWidget(self.retry)
-        self.seasons = QComboBox()
-        self.seasons.setAccessibleName("Temporada")
-        self.seasons.currentIndexChanged.connect(self._season_changed)
+        self.seasons = SeasonTabs()
+        self.seasons.currentChanged.connect(self._season_changed)
         self.episode_list = QListWidget()
         self.episode_list.setObjectName("episodes")
         self.episode_list.setAccessibleName("Episódios da temporada")
+        self.episode_list.setItemDelegate(EpisodeDelegate(self.episode_list))
+        self.episode_list.setMouseTracking(True)
+        self.episode_list.setSpacing(2)
         self.episode_list.itemDoubleClicked.connect(lambda _item: self._play_selected())
         if item.kind == "series":
             layout.addWidget(self.seasons)
@@ -196,6 +199,7 @@ class DetailDialog(QFrame):
         self.retry.hide()
         if self.item.kind == "series":
             self.feedback.setText("Carregando temporadas e episódios…")
+            self.feedback.show()
             self.task_id = self.tasks.submit(lambda: self.client.series_details(self.item), self._series_loaded, self._failed)
         elif self.item.kind == "movie":
             self.task_id = self.tasks.submit(lambda: self.client.movie_details(self.item), self._movie_loaded, self._movie_failed)
@@ -214,30 +218,31 @@ class DetailDialog(QFrame):
         self.episodes = payload["episodes"]
         info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
         self.plot.setText(str(info.get("plot") or self.item.plot or "Sinopse não informada pelo provedor.")[:1800])
-        self.seasons.blockSignals(True)
-        self.seasons.clear()
-        for season in sorted({ep.season for ep in self.episodes}):
-            self.seasons.addItem(f"Temporada {season}", season)
+        seasons = sorted({ep.season for ep in self.episodes})
         checkpoint = self.library.checkpoint(self.item)
-        if checkpoint:
-            index = self.seasons.findData(checkpoint["item"].season)
-            if index >= 0:
-                self.seasons.setCurrentIndex(index)
-        self.seasons.blockSignals(False)
+        self.seasons.set_seasons(seasons, checkpoint["item"].season if checkpoint else None)
+        count = len(seasons)
+        self.caption.setText(" · ".join(value for value in (
+            self.item.year, f"{count} temporada{'s' if count != 1 else ''}",
+            f"Nota {self.item.rating}" if self.item.rating and self.item.rating != "0" else "",
+        ) if value))
         self._season_changed()
-        self.feedback.setText(f"{len(self.episodes)} episódios disponíveis." if self.episodes else "O provedor ainda não disponibilizou episódios para esta série.")
+        self.feedback.setText("" if self.episodes else "O provedor ainda não disponibilizou episódios para esta série.")
+        self.feedback.setVisible(not self.episodes)
         self.watch.setEnabled(bool(self.episodes))
 
     def _season_changed(self, _index=None):
         self.episode_list.clear()
         checkpoint = self.library.checkpoint(self.item)
         for episode in self.episodes:
-            if episode.season != self.seasons.currentData():
+            if episode.season != self.seasons.current_season():
                 continue
             progress = self.library.checkpoint(episode)
-            suffix = f"  ·  Continuar em {timestamp(progress['position'])}" if progress else ""
-            row = QListWidgetItem(f"{episode.episode:02}   {episode.name}{suffix}")
+            suffix = f"Continuar em {timestamp(progress['position'])}" if progress else ""
+            row = QListWidgetItem(f"{episode.episode} · {episode.name}")
             row.setData(Qt.ItemDataRole.UserRole, episode)
+            row.setData(Qt.ItemDataRole.UserRole + 1, suffix)
+            row.setData(Qt.ItemDataRole.AccessibleTextRole, f"Episódio {episode.episode}: {episode.name}. {suffix}")
             row.setToolTip(episode.name)
             self.episode_list.addItem(row)
             if checkpoint and checkpoint["item"].uid == episode.uid:

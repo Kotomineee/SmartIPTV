@@ -4,17 +4,18 @@ import os
 from pathlib import Path
 
 import PySide6
-from PySide6.QtCore import QLocale, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QLocale, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QActionGroup, QKeySequence, QShortcut
 from PySide6.QtMultimedia import QAudioOutput, QMediaMetaData, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
-    QBoxLayout, QHBoxLayout, QMenu, QPushButton, QSizePolicy, QSlider,
+    QApplication, QBoxLayout, QHBoxLayout, QMenu, QPushButton, QSizePolicy,
     QToolButton, QVBoxLayout, QWidget,
 )
 
 from .icons import icon
 from .login import label
+from .sliders import ClickSlider
 
 
 def timestamp(milliseconds):
@@ -52,10 +53,11 @@ class PlayerWidget(QWidget):
         self.fullscreen_state = None
         self.setObjectName("playerRoot")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 14, 22, 18)
-        layout.setSpacing(10)
-        heading = QHBoxLayout()
+        self.header = QWidget(self)
+        self.header.setObjectName("playerOverlay")
+        self.header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        heading = QHBoxLayout(self.header)
+        heading.setContentsMargins(22, 14, 22, 10)
         self.back = self._button("back", "Voltar ao catálogo", self.back_requested.emit)
         heading.addWidget(self.back)
         self.title_label = label(item.display_name, "sectionTitle")
@@ -63,11 +65,15 @@ class PlayerWidget(QWidget):
         self.title_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.title_label.setToolTip(item.display_name)
         heading.addWidget(self.title_label, 1)
-        layout.addLayout(heading)
-        self.video = QVideoWidget()
+        self.video = QVideoWidget(self)
         self.video.setMinimumSize(0, 0)
         self.video.setStyleSheet("background: #000;")
-        layout.addWidget(self.video, 1)
+        self.footer = QWidget(self)
+        self.footer.setObjectName("playerOverlay")
+        self.footer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        layout = QVBoxLayout(self.footer)
+        layout.setContentsMargins(22, 10, 22, 18)
+        layout.setSpacing(10)
         feedback = QHBoxLayout()
         self.status = label("Conectando à transmissão…", "muted", True)
         feedback.addWidget(self.status, 1)
@@ -78,11 +84,12 @@ class PlayerWidget(QWidget):
         feedback.addWidget(self.retry)
         layout.addLayout(feedback)
 
-        self.seek = QSlider(Qt.Orientation.Horizontal)
+        self.seek = ClickSlider()
         self.seek.setRange(0, 10000)
         self.seek.setEnabled(False)
         self.seek.setAccessibleName("Posição da reprodução")
         self.seek.sliderReleased.connect(self._seek)
+        self.seek.keyboardCommitted.connect(self._seek)
         layout.addWidget(self.seek)
         self.controls = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         self.controls.setSpacing(8)
@@ -108,7 +115,7 @@ class PlayerWidget(QWidget):
         right.addStretch()
         self.mute = self._button("volume", "Silenciar", self.toggle_mute)
         right.addWidget(self.mute)
-        self.volume = QSlider(Qt.Orientation.Horizontal)
+        self.volume = ClickSlider()
         self.volume.setRange(0, 100)
         self.volume.setValue(70)
         self.volume.setFixedWidth(90)
@@ -146,6 +153,15 @@ class PlayerWidget(QWidget):
         self.timer = QTimer(self)
         self.timer.setInterval(5000)
         self.timer.timeout.connect(self.flush_progress)
+        self.hide_controls_timer = QTimer(self)
+        self.hide_controls_timer.setSingleShot(True)
+        self.hide_controls_timer.setInterval(2500)
+        self.hide_controls_timer.timeout.connect(self._hide_controls)
+        for menu in (self.audio_menu, self.subtitle_menu):
+            menu.aboutToHide.connect(self._show_controls)
+        for widget in [self, *self.findChildren(QWidget)]:
+            widget.setMouseTracking(True)
+        QApplication.instance().installEventFilter(self)
         self.source = QUrl(source_override) if source_override else QUrl(client.playback_url(item))
         for key, callback in (("Space", self.toggle_pause), ("F", self.toggle_fullscreen),
                               ("Escape", self.escape), ("Left", lambda: self.skip(-10000)),
@@ -169,7 +185,61 @@ class PlayerWidget(QWidget):
 
     def resizeEvent(self, event):
         self.controls.setDirection(QBoxLayout.Direction.TopToBottom if event.size().width() < 700 else QBoxLayout.Direction.LeftToRight)
+        self._layout_video()
         super().resizeEvent(event)
+
+    def _layout_video(self):
+        if self.closing:
+            return
+        # In fullscreen the bars overlay the video, so revealing them never
+        # changes the decoded surface's size or the movie's aspect ratio.
+        self.header.layout().activate()
+        self.footer.layout().activate()
+        top = self.header.sizeHint().height()
+        bottom = self.footer.sizeHint().height()
+        self.header.setGeometry(0, 0, self.width(), top)
+        self.footer.setGeometry(0, max(0, self.height() - bottom), self.width(), bottom)
+        if self.fullscreen_state is not None:
+            self.video.setGeometry(self.rect())
+        else:
+            self.video.setGeometry(22, top, max(0, self.width() - 44), max(0, self.height() - top - bottom))
+        self.header.raise_()
+        self.footer.raise_()
+
+    def eventFilter(self, watched, event):
+        if self.closing:
+            return False
+        if watched in (self.header, self.footer) and event.type() == QEvent.Type.LayoutRequest:
+            QTimer.singleShot(0, self._layout_video)
+        if self.fullscreen_state is not None and isinstance(watched, QWidget) and (watched is self or self.isAncestorOf(watched)):
+            if event.type() in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress,
+                                QEvent.Type.MouseButtonRelease, QEvent.Type.KeyPress, QEvent.Type.Wheel):
+                self._show_controls()
+        return super().eventFilter(watched, event)
+
+    def _show_controls(self):
+        if self.closing:
+            return
+        self.header.show()
+        self.footer.show()
+        self.unsetCursor()
+        self.video.unsetCursor()
+        self._layout_video()
+        if self.fullscreen_state is not None:
+            self.hide_controls_timer.start()
+
+    def _hide_controls(self):
+        if self.closing or self.fullscreen_state is None:
+            return
+        if (self.seek.isSliderDown() or self.volume.isSliderDown() or self.audio_menu.isVisible()
+                or self.subtitle_menu.isVisible() or QApplication.mouseButtons() or self.retry.isVisible()):
+            self.hide_controls_timer.start()
+            return
+        self.header.hide()
+        self.footer.hide()
+        self.setCursor(Qt.CursorShape.BlankCursor)
+        self.video.setCursor(Qt.CursorShape.BlankCursor)
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _start(self):
         if self.closing:
@@ -279,6 +349,7 @@ class PlayerWidget(QWidget):
         self.status.setText("Não foi possível reproduzir. Confira a conexão, o limite de telas da conta ou tente outro conteúdo.")
         self.status.show()
         self.retry.show()
+        self._show_controls()
 
     def flush_progress(self):
         if self.pending_resume:
@@ -368,13 +439,21 @@ class PlayerWidget(QWidget):
             window.showFullScreen()
             self.fullscreen.setToolTip("Sair da tela cheia")
             self.fullscreen.setAccessibleName("Sair da tela cheia")
+            self._show_controls()
 
     def leave_fullscreen(self):
         if self.fullscreen_state is not None:
-            self.window().setWindowState(self.fullscreen_state)
+            previous_state = self.fullscreen_state
             self.fullscreen_state = None
+            self.hide_controls_timer.stop()
+            self.window().setWindowState(previous_state)
             self.fullscreen.setToolTip("Tela cheia")
             self.fullscreen.setAccessibleName("Tela cheia")
+            self.header.show()
+            self.footer.show()
+            self.unsetCursor()
+            self.video.unsetCursor()
+            self._layout_video()
 
     def escape(self):
         if self.fullscreen_state is not None:
@@ -386,6 +465,8 @@ class PlayerWidget(QWidget):
         if self.closing:
             return
         self.closing = True
+        QApplication.instance().removeEventFilter(self)
+        self.hide_controls_timer.stop()
         self.flush_progress()
         self.leave_fullscreen()
         self.timer.stop()

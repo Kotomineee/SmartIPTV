@@ -5,6 +5,10 @@ QFrame#detailPanel { background: #121d1a; border: 1px solid #426653; border-radi
 QFrame#accountSeparator { background: #2c4037; border: none; }
 QFrame#settingsCard { background: #121d1a; border: 1px solid #2b4337; border-radius: 13px; }
 QWidget#playerRoot { background: #070b0a; }
+QWidget#playerOverlay { background: rgba(7, 11, 10, 225); }
+QPushButton#seasonTab { color: #a6c0b2; background: #1a2b23; border: 1px solid transparent; border-radius: 17px; padding: 0; }
+QPushButton#seasonTab:hover, QPushButton#seasonTab:focus { border-color: #65dfad; color: #e3f9ed; }
+QPushButton#seasonTab:checked { background: #65dfad; color: #08231a; font-weight: 600; }
 QToolButton { background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 4px; }
 QToolButton:hover, QToolButton:focus { background: #203b30; border-color: #559d79; }
 QToolButton::menu-indicator { image: none; }
@@ -48,8 +52,6 @@ QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 QSlider::groove:horizontal { height: 5px; background: #2c4135; border-radius: 2px; }
 QSlider::sub-page:horizontal { background: #65dfad; border-radius: 2px; }
 QSlider::handle:horizontal { width: 12px; margin: -4px 0; border-radius: 6px; background: #8cf0bf; }
-QListWidget#episodes { background: #101916; color: #d0e2d5; border: 1px solid #2d4032; border-radius: 8px; outline: none; }
-QListWidget#episodes::item { padding: 14px 10px; border-bottom: 1px solid #24362a; }
-QListWidget#episodes::item:selected { background: #274735; color: #a1f0c7; }
+QListWidget#episodes { background: transparent; color: #d0e2d5; border: none; outline: none; }
 QToolTip { color: #e8f4eb; background: #20382b; border: 1px solid #436149; padding: 6px; }
 """
