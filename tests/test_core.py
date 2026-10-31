@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -99,6 +100,60 @@ class LibraryTests(unittest.TestCase):
         self.assertTrue(self.library.auto_next_enabled)
         self.library.set_auto_next(False)
         self.assertFalse(self.library.auto_next_enabled)
+
+    def test_episode_favorite_is_the_series_and_shared_between_episodes(self):
+        episode = Content("episode", "91", "Um episódio", series_id="9", series_name="Série", artwork="cover", plot="Sinopse do episódio")
+        other = Content("episode", "92", "Outro episódio", series_id="9")
+        series = Content("series", "9", "Série")
+        self.assertTrue(self.library.toggle_favorite(episode))
+        self.assertEqual(list(self.library.favorites), [series.uid])
+        self.assertEqual(self.library.favorites[series.uid].name, "Série")
+        self.assertEqual(self.library.favorites[series.uid].artwork, "cover")
+        self.assertEqual(self.library.favorites[series.uid].plot, "")
+        self.assertTrue(self.library.is_favorite(other))
+        self.assertTrue(self.library.is_favorite(series))
+        self.assertFalse(self.library.toggle_favorite(other))
+        self.assertFalse(self.library.is_favorite(episode))
+        self.assertEqual(self.library.db.execute("SELECT COUNT(*) FROM favorites").fetchone()[0], 0)
+
+    def test_legacy_episode_favorites_migrate_once_without_losing_series_or_progress(self):
+        series = Content("series", "9", "Série completa", plot="Sinopse da série", added=100)
+        episodes = [Content("episode", str(i), "Episódio", series_id="9", series_name="Série", episode=i) for i in (2, 6)]
+        self.library.toggle_favorite(series)
+        self.library.toggle_favorite(self.movie)
+        other_account = "another-account"
+        with self.library.db:
+            for episode in episodes:
+                for account in (self.library.account, other_account):
+                    self.library.db.execute("INSERT INTO favorites VALUES (?,?,?,?)", (account, episode.uid, json.dumps(episode.to_dict()), 200))
+        self.library.record_progress(episodes[-1], 15000, 90000)
+        self.library.select_account(self.credentials)
+        self.assertEqual(set(self.library.favorites), {series.uid, self.movie.uid})
+        self.assertEqual(self.library.favorites[series.uid], series)
+        self.assertEqual(self.library.checkpoint(series)["position"], 15000)
+        self.assertEqual(self.library.db.execute("SELECT COUNT(*) FROM favorites WHERE account=? AND uid LIKE 'episode:%'", (self.library.account,)).fetchone()[0], 0)
+        self.assertEqual(self.library.db.execute("SELECT COUNT(*) FROM favorites WHERE account=?", (other_account,)).fetchone()[0], 2)
+        self.library.select_account(self.credentials)
+        self.assertEqual(set(self.library.favorites), {series.uid, self.movie.uid})
+
+    def test_legacy_episode_only_favorites_become_one_durable_series(self):
+        for i in (2, 6):
+            episode = Content("episode", str(i), "Episódio", series_id="9", series_name="Série", artwork="cover", episode=i)
+            with self.library.db:
+                self.library.db.execute("INSERT INTO favorites VALUES (?,?,?,?)", (self.library.account, episode.uid, json.dumps(episode.to_dict()), i))
+        self.library.select_account(self.credentials)
+        self.assertEqual(list(self.library.favorites), ["series:9"])
+        self.assertEqual(self.library.favorites["series:9"].name, "Série")
+        self.library.close()
+        self.library = Library(self.directory.name)
+        self.library.select_account(self.credentials)
+        self.assertEqual(list(self.library.favorites), ["series:9"])
+
+    def test_episode_without_parent_id_cannot_be_favorited_by_title(self):
+        episode = Content("episode", "91", "Episódio", series_name="Série")
+        self.assertFalse(self.library.toggle_favorite(episode))
+        self.assertFalse(self.library.is_favorite(episode))
+        self.assertFalse(self.library.favorites)
 
     def test_accounts_are_isolated(self):
         self.library.toggle_favorite(self.movie)

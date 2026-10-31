@@ -47,6 +47,17 @@ class Content:
         return cls(**data)
 
 
+def content_root(item):
+    """Resolve an episode to its series without copying episode-only metadata."""
+    if item.kind != "episode":
+        return item
+    if not item.series_id:
+        return None
+    return Content("series", item.series_id, item.series_name or "Série",
+                   categories=item.categories, artwork=item.artwork, added=item.added,
+                   year=item.year, rating=item.rating)
+
+
 def content_from_api(kind, data):
     item_id = str(data.get("series_id" if kind == "series" else "stream_id") or "")
     if not item_id:

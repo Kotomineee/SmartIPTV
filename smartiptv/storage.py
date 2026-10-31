@@ -10,7 +10,7 @@ import sqlite3
 import time
 
 from .client import Credentials
-from .models import Content
+from .models import Content, content_root
 
 
 def data_directory():
@@ -101,9 +101,23 @@ class Library:
         self.account = account_key(credentials)
         self.favorites = {}
         self.progress = {}
+        # Convert legacy episode favorites once, preserving a saved series and
+        # its richer metadata if both records already exist for this account.
+        rows = list(self.db.execute("SELECT uid,item,updated FROM favorites WHERE account=? ORDER BY updated DESC,rowid DESC", (self.account,)))
+        with self.db:
+            for uid, raw, updated in rows:
+                try:
+                    item = Content.from_dict(json.loads(raw))
+                except (ValueError, TypeError, KeyError):
+                    continue
+                if item.kind == "episode" and (series := content_root(item)):
+                    self.db.execute("INSERT OR IGNORE INTO favorites VALUES (?,?,?,?)", (self.account, series.uid, json.dumps(series.to_dict()), updated))
+                    self.db.execute("DELETE FROM favorites WHERE account=? AND uid=?", (self.account, uid))
         for uid, raw in self.db.execute("SELECT uid,item FROM favorites WHERE account=? ORDER BY updated DESC", (self.account,)):
             try:
-                self.favorites[uid] = Content.from_dict(json.loads(raw))
+                item = Content.from_dict(json.loads(raw))
+                if item.kind != "episode":
+                    self.favorites[uid] = item
             except (ValueError, TypeError, KeyError):
                 pass
         for uid, raw, position, duration, finished, updated in self.db.execute("SELECT uid,item,position,duration,finished,updated FROM progress WHERE account=? ORDER BY updated DESC,rowid DESC", (self.account,)):
@@ -114,9 +128,13 @@ class Library:
         self.last_progress_update = max((entry["updated"] for entry in self.progress.values()), default=0.0)
 
     def is_favorite(self, item):
-        return item.uid in self.favorites
+        item = content_root(item)
+        return bool(item and item.uid in self.favorites)
 
     def toggle_favorite(self, item):
+        item = content_root(item)
+        if item is None:
+            return False
         if self.is_favorite(item):
             self.db.execute("DELETE FROM favorites WHERE account=? AND uid=?", (self.account, item.uid))
             del self.favorites[item.uid]

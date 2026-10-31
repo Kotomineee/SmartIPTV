@@ -166,7 +166,7 @@ class PlayerWidget(QWidget):
         self.hide_controls_timer.timeout.connect(self._hide_controls)
         self.video_click_timer = QTimer(self)
         self.video_click_timer.setSingleShot(True)
-        self.video_click_timer.timeout.connect(self.toggle_pause)
+        self.video_click_state = None
         self.video_press_position = None
         self.video_double_click = False
         for menu in (self.audio_menu, self.subtitle_menu):
@@ -243,6 +243,15 @@ class PlayerWidget(QWidget):
             if self._video_pointer(watched, event):
                 point = event.globalPosition().toPoint()
                 if event.type() == QEvent.Type.MouseButtonDblClick:
+                    # The first click responds immediately. Restore its prior
+                    # state when Windows recognizes the fullscreen gesture.
+                    if self.video_click_timer.isActive():
+                        if self.video_click_state == QMediaPlayer.PlaybackState.PlayingState:
+                            self.player.play()
+                        elif self.video_click_state == QMediaPlayer.PlaybackState.PausedState:
+                            self.player.pause()
+                        else:
+                            self.player.stop()
                     self.video_click_timer.stop()
                     self.video_press_position = None
                     self.video_double_click = True
@@ -255,8 +264,10 @@ class PlayerWidget(QWidget):
                         self.video_double_click = False
                     elif (self.video_press_position is not None and
                           (point - self.video_press_position).manhattanLength() < QApplication.startDragDistance()):
-                        # Wait for the system double-click interval so entering
-                        # fullscreen never also pauses/resumes the video.
+                        self.video_click_state = self.player.playbackState()
+                        self.toggle_pause()
+                        # This timer only recognizes double-clicks; it never
+                        # delays or schedules playback changes.
                         self.video_click_timer.start(QApplication.doubleClickInterval())
                     self.video_press_position = None
                 event.accept()

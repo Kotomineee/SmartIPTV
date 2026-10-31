@@ -14,7 +14,7 @@ from .details import DetailDialog
 from .gallery import ArtworkCache, Gallery
 from .icons import icon
 from .login import label
-from .models import Content
+from .models import Content, content_root
 from .player import PlayerWidget
 from .settings import SettingsPage
 from .theme import THEME
@@ -362,7 +362,18 @@ class BrowserWindow(QMainWindow):
             self.empty_title.setText("Nenhum resultado encontrado" if term else "Seus favoritos ficam aqui" if tab == "favorites" else "Nenhum conteúdo em andamento" if tab == "continue" else "Nenhum conteúdo disponível")
             self.empty_description.setText("Tente outro nome ou categoria." if term else "Toque no coração de um conteúdo para salvá-lo." if tab == "favorites" else "Comece um filme ou episódio para retomar depois." if tab == "continue" else "Atualize o catálogo ou escolha outra categoria.")
 
+    def _content_root(self, item):
+        root = content_root(item)
+        if root and item.kind == "episode":
+            return next((series for series in self.catalog.get("series", {}).get("items", [])
+                         if series.id == root.id), self.library.favorites.get(root.uid, root))
+        return root
+
     def toggle_favorite(self, item):
+        item = self._content_root(item)
+        if item is None:
+            self.notify("O provedor não informou a série deste episódio.", True)
+            return
         try:
             self.library.toggle_favorite(item)
         except Exception:
@@ -383,8 +394,9 @@ class BrowserWindow(QMainWindow):
     def open_content(self, item):
         if not item:
             return
-        if item.kind == "episode":
-            self.play(item)
+        item = self._content_root(item)
+        if item is None:
+            self.notify("O provedor não informou a série deste episódio.", True)
             return
         if self.detail_dialog:
             self.detail_dialog.close()

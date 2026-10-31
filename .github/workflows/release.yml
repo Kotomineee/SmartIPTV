@@ -50,6 +50,10 @@ jobs:
         env:
           SMARTIPTV_SCREENSHOT_DIR: test-screenshots
         run: python scripts/check_v150.py
+      - name: Check series favorites and resume episode lists
+        env:
+          SMARTIPTV_SCREENSHOT_DIR: test-screenshots
+        run: python scripts/check_v151.py
       - name: Save interface checks
         if: always()
         uses: actions/upload-artifact@v4

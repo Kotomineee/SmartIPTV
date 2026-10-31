@@ -71,8 +71,10 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v150-") as directory:
         # One click toggles playback; the second click of a double-click must
         # not create a delayed pause after changing the window mode.
         QTest.mouseClick(player.video, Qt.MouseButton.LeftButton, pos=player.video.rect().center())
+        assert player.player.playbackState() == paused, "Video click must pause synchronously without waiting for double-click"
         wait_for(lambda: player.player.playbackState() == paused, "Video click did not pause")
         QTest.mouseClick(player.video, Qt.MouseButton.LeftButton, pos=player.video.rect().center())
+        assert player.player.playbackState() == playing, "Video click must resume synchronously without waiting for double-click"
         wait_for(lambda: player.player.playbackState() == playing, "Video click did not resume")
         QTest.mouseClick(player.video, Qt.MouseButton.LeftButton, pos=player.video.rect().center())
         QTest.mouseDClick(player.video, Qt.MouseButton.LeftButton, pos=player.video.rect().center())
@@ -86,6 +88,7 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v150-") as directory:
         # surface receives native mouse events instead of QWidget events.
         surface = next(w for w in app.allWindows() if w.metaObject().className() == "QVideoWindow" and window.windowHandle().isAncestorOf(w))
         QTest.mouseClick(surface, Qt.MouseButton.LeftButton, pos=QPoint(surface.width() // 2, surface.height() // 2))
+        assert player.player.playbackState() == paused, "Native video click waited instead of pausing immediately"
         wait_for(lambda: player.player.playbackState() == paused, "Native video surface click did not pause")
         # QWindow QTest events use a synthetic clock. Separate gestures in
         # that clock too, so the earlier single-click is not counted as the
