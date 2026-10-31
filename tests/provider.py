@@ -24,7 +24,7 @@ class Provider:
                 if path.path.rsplit("/", 1)[-1] in owner.failed_media:
                     self.send_error(503)
                     return
-                if owner.media_file and (path.path == "/sample.mp4" or path.path.startswith(("/movie/demo/demopass/", "/series/demo/demopass/"))):
+                if owner.media_file and (path.path == "/sample.mp4" or path.path.startswith(("/movie/demo/demopass/", "/series/demo/demopass/", "/live/demo/demopass/"))):
                     owner.media_requests.append(path.path.rsplit("/", 1)[-1])
                     raw = owner.media_file.read_bytes()
                     start, end = 0, len(raw) - 1

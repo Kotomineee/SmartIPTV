@@ -42,6 +42,7 @@ class PlayerWidget(QWidget):
     library_changed = Signal()
     back_requested = Signal()
     episode_finished = Signal(object)
+    next_requested = Signal()
 
     def __init__(self, client, library, item, restart=False, parent=None, source_override=None):
         super().__init__(parent)
@@ -103,10 +104,13 @@ class PlayerWidget(QWidget):
         self.pause = self._button("pause", "Pausar", self.toggle_pause)
         self.rewind = self._button("rewind", "Voltar 10 segundos", lambda: self.skip(-10000))
         self.forward = self._button("forward", "Avançar 10 segundos", lambda: self.skip(10000))
+        self.next_episode = self._button("next", "Próximo episódio", self.next_requested.emit)
+        self.next_episode.setVisible(item.kind == "episode")
+        self.next_episode.setEnabled(False)
         self.rewind.setEnabled(False)
         self.forward.setEnabled(False)
         self.time_label = label("00:00 / " + ("AO VIVO" if item.kind == "live" else "00:00"), "playerTime")
-        for button in (self.pause, self.rewind, self.forward):
+        for button in (self.pause, self.rewind, self.forward, self.next_episode):
             left.addWidget(button)
         left.addWidget(self.time_label)
         left.addStretch()
@@ -160,6 +164,11 @@ class PlayerWidget(QWidget):
         self.hide_controls_timer.setSingleShot(True)
         self.hide_controls_timer.setInterval(2500)
         self.hide_controls_timer.timeout.connect(self._hide_controls)
+        self.video_click_timer = QTimer(self)
+        self.video_click_timer.setSingleShot(True)
+        self.video_click_timer.timeout.connect(self.toggle_pause)
+        self.video_press_position = None
+        self.video_double_click = False
         for menu in (self.audio_menu, self.subtitle_menu):
             menu.aboutToHide.connect(self._show_controls)
         for widget in [self, *self.findChildren(QWidget)]:
@@ -219,7 +228,8 @@ class PlayerWidget(QWidget):
             QTimer.singleShot(0, self._layout_video)
         if self.fullscreen_state is not None and event.type() in (
                 QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress,
-                QEvent.Type.MouseButtonRelease, QEvent.Type.KeyPress, QEvent.Type.Wheel):
+                QEvent.Type.MouseButtonRelease, QEvent.Type.MouseButtonDblClick,
+                QEvent.Type.KeyPress, QEvent.Type.Wheel):
             belongs = isinstance(watched, QWidget) and (watched is self or self.isAncestorOf(watched))
             if isinstance(watched, QWindow):
                 handle = self.window().windowHandle()
@@ -228,7 +238,50 @@ class PlayerWidget(QWidget):
                     belongs = self.rect().contains(self.mapFromGlobal(event.globalPosition().toPoint()))
             if belongs:
                 self._show_controls()
+        if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
+                            QEvent.Type.MouseButtonDblClick) and event.button() == Qt.MouseButton.LeftButton:
+            if self._video_pointer(watched, event):
+                point = event.globalPosition().toPoint()
+                if event.type() == QEvent.Type.MouseButtonDblClick:
+                    self.video_click_timer.stop()
+                    self.video_press_position = None
+                    self.video_double_click = True
+                    self.toggle_fullscreen()
+                elif event.type() == QEvent.Type.MouseButtonPress:
+                    self.video_press_position = point
+                    self.video_double_click = False
+                else:
+                    if self.video_double_click:
+                        self.video_double_click = False
+                    elif (self.video_press_position is not None and
+                          (point - self.video_press_position).manhattanLength() < QApplication.startDragDistance()):
+                        # Wait for the system double-click interval so entering
+                        # fullscreen never also pauses/resumes the video.
+                        self.video_click_timer.start(QApplication.doubleClickInterval())
+                    self.video_press_position = None
+                event.accept()
+                return True
         return super().eventFilter(watched, event)
+
+    def _video_pointer(self, watched, event):
+        if QApplication.activePopupWidget() is not None or not self.video.isVisible():
+            return False
+        point = event.globalPosition().toPoint()
+        if not self.video.rect().contains(self.video.mapFromGlobal(point)):
+            return False
+        if any(widget.isVisible() and widget.rect().contains(widget.mapFromGlobal(point))
+               for widget in (self.header, self.footer)):
+            return False
+        if isinstance(watched, QWidget):
+            return watched in (self, self.overlay, self.video) or self.video.isAncestorOf(watched)
+        if isinstance(watched, QWindow):
+            handle = self.window().windowHandle()
+            return bool(handle and (watched is handle or handle.isAncestorOf(watched)))
+        return False
+
+    def set_next_available(self, available):
+        self.next_episode.setVisible(self.item.kind == "episode")
+        self.next_episode.setEnabled(self.item.kind == "episode" and bool(available) and not self.closing)
 
     def _show_controls(self):
         if self.closing:
@@ -267,11 +320,15 @@ class PlayerWidget(QWidget):
     def load_item(self, item, restart=False, source_override=None):
         # Reuse the decoding surface between episodes. Destroying a video sink
         # while the previous decoder is draining can block some video drivers.
+        self.video_click_timer.stop()
+        self.video_press_position = None
+        self.video_double_click = False
         self.flush_progress()
         self.timer.stop()
         self.player.stop()
         self.player.setSource(QUrl())
         self.item = item
+        self.set_next_available(False)
         checkpoint = self.library.checkpoint(item)
         self.pending_resume = 0 if restart or not checkpoint else checkpoint["position"]
         self.finished = False
@@ -289,6 +346,7 @@ class PlayerWidget(QWidget):
         QTimer.singleShot(0, self._start)
 
     def _retry(self):
+        self.video_click_timer.stop()
         self.retry.hide()
         self.finished = False
         self.pending_resume = self.player.position() or self.pending_resume
@@ -491,6 +549,7 @@ class PlayerWidget(QWidget):
             return
         self.closing = True
         QApplication.instance().removeEventFilter(self)
+        self.video_click_timer.stop()
         self.hide_controls_timer.stop()
         self.flush_progress()
         self.leave_fullscreen()

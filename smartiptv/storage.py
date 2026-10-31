@@ -3,6 +3,7 @@ import ctypes
 from ctypes import wintypes
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import sqlite3
@@ -85,6 +86,7 @@ class Library:
         self.account = ""
         self.favorites = {}
         self.progress = {}
+        self.last_progress_update = 0.0
 
     @property
     def auto_next_enabled(self):
@@ -104,11 +106,12 @@ class Library:
                 self.favorites[uid] = Content.from_dict(json.loads(raw))
             except (ValueError, TypeError, KeyError):
                 pass
-        for uid, raw, position, duration, finished, updated in self.db.execute("SELECT uid,item,position,duration,finished,updated FROM progress WHERE account=?", (self.account,)):
+        for uid, raw, position, duration, finished, updated in self.db.execute("SELECT uid,item,position,duration,finished,updated FROM progress WHERE account=? ORDER BY updated DESC,rowid DESC", (self.account,)):
             try:
                 self.progress[uid] = {"item": Content.from_dict(json.loads(raw)), "position": position, "duration": duration, "finished": bool(finished), "updated": updated}
             except (ValueError, TypeError, KeyError):
                 pass
+        self.last_progress_update = max((entry["updated"] for entry in self.progress.values()), default=0.0)
 
     def is_favorite(self, item):
         return item.uid in self.favorites
@@ -131,25 +134,45 @@ class Library:
         position, duration = max(0, int(position)), max(0, int(duration))
         if duration and position >= duration * .98 and duration - position <= 60000:
             finished = True
-        updated = time.time()
+        # Windows clocks can assign the same timestamp to consecutive saves.
+        # Keep writes strictly ordered, even if the system clock moves back.
+        updated = max(time.time(), math.nextafter(self.last_progress_update, math.inf))
         self.db.execute("INSERT OR REPLACE INTO progress VALUES (?,?,?,?,?,?,?)", (self.account, item.uid, json.dumps(item.to_dict()), position, duration, int(finished), updated))
         self.db.commit()
+        self.last_progress_update = updated
         self.progress[item.uid] = {"item": item, "position": position, "duration": duration, "finished": bool(finished), "updated": updated}
 
     def checkpoint(self, item):
         if item.kind == "series":
-            candidates = [p for p in self.progress.values() if p["item"].series_id == item.id and not p["finished"]]
-            return max(candidates, key=lambda p: p["updated"], default=None)
+            candidates = [p for p in self.progress.values() if p["item"].kind == "episode" and p["item"].series_id == item.id]
+            latest = max(candidates, key=lambda p: p["updated"], default=None)
+            return latest if latest and not latest["finished"] else None
         entry = self.progress.get(item.uid)
         return entry if entry and not entry["finished"] else None
 
     def continuing(self):
-        return [p["item"] for p in sorted(self.progress.values(), key=lambda p: p["updated"], reverse=True) if not p["finished"] and p["position"] >= 1000]
+        result, seen = [], set()
+        for entry in sorted(self.progress.values(), key=lambda p: p["updated"], reverse=True):
+            item = entry["item"]
+            key = ("series", item.series_id) if item.kind == "episode" and item.series_id else ("item", item.uid)
+            if key in seen:
+                continue
+            seen.add(key)
+            # A completed latest episode must not resurrect an older one.
+            if not entry["finished"] and entry["position"] >= 1000:
+                result.append(item)
+        return result
 
     def remove_progress(self, item):
-        self.db.execute("DELETE FROM progress WHERE account=? AND uid=?", (self.account, item.uid))
+        if item.kind == "episode" and item.series_id:
+            entries = [entry["item"].uid for entry in self.progress.values()
+                       if entry["item"].kind == "episode" and entry["item"].series_id == item.series_id]
+        else:
+            entries = [item.uid]
+        self.db.executemany("DELETE FROM progress WHERE account=? AND uid=?", [(self.account, uid) for uid in entries])
         self.db.commit()
-        self.progress.pop(item.uid, None)
+        for uid in entries:
+            self.progress.pop(uid, None)
 
     def close(self):
         self.db.close()

@@ -46,6 +46,17 @@ jobs:
         run: python scripts/check_app.py
       - name: Check embedded player, tracks, settings and next episode
         run: python scripts/check_v110.py
+      - name: Check video gestures, manual next and unique series resume
+        env:
+          SMARTIPTV_SCREENSHOT_DIR: test-screenshots
+        run: python scripts/check_v150.py
+      - name: Save interface checks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartIPTV-windows-interface-checks
+          path: test-screenshots/*.png
+          if-no-files-found: ignore
       - name: Build Windows executable
         run: python -m PyInstaller --noconfirm SmartIPTV.spec
       - name: Check packaged startup

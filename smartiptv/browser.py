@@ -434,6 +434,7 @@ class BrowserWindow(QMainWindow):
             self.player_window = player
             player.library_changed.connect(self.library_updated)
             player.back_requested.connect(self.leave_player)
+            player.next_requested.connect(self.next_episode)
             self.window_pages.addWidget(player)
         player.episode_finished.connect(lambda ended, g=generation: self._episode_ended(ended, g))
         self.window_pages.setCurrentWidget(player)
@@ -445,6 +446,7 @@ class BrowserWindow(QMainWindow):
                 lambda payload, g=generation: self._queue_loaded(payload, g),
                 lambda _message, g=generation: self._queue_failed(g),
             )
+        self._update_next_button()
         QTimer.singleShot(1500, self.refresh_account)
 
     def _dispose_player(self):
@@ -476,14 +478,40 @@ class BrowserWindow(QMainWindow):
             return
         self.episode_task = None
         self.episode_queue = payload["episodes"]
+        self._update_next_button()
         if self.pending_next and self.player_window:
             self._episode_ended(self.player_window.item, generation)
 
     def _queue_failed(self, generation):
         if generation == self.play_generation and self.player_window:
             self.episode_task = None
+            self._update_next_button()
             self.player_window.status.setText("Não foi possível carregar o próximo episódio. Volte à série para tentar novamente.")
             self.player_window.status.show()
+
+    def _next_item(self, item):
+        if item.kind != "episode":
+            return None
+        index = next((i for i, episode in enumerate(self.episode_queue) if episode.uid == item.uid), -1)
+        return self.episode_queue[index + 1] if 0 <= index < len(self.episode_queue) - 1 else None
+
+    def _update_next_button(self):
+        if self.player_window:
+            self.player_window.set_next_available(not self.episode_task and self._next_item(self.player_window.item) is not None)
+
+    def next_episode(self):
+        player = self.player_window
+        if self.closed or not player or self.episode_task or not player.next_episode.isEnabled():
+            return
+        following = self._next_item(player.item)
+        if following is None:
+            return
+        generation, queue = self.play_generation, list(self.episode_queue)
+        player.set_next_available(False)
+        # Manual advancement is independent of the autoplay preference and
+        # cannot reopen playback if Back/logout occurs before this callback.
+        QTimer.singleShot(0, lambda: self.play(following, True, queue)
+                          if generation == self.play_generation and self.player_window is player and not self.closed else None)
 
     def _episode_ended(self, item, generation):
         player = self.player_window

@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from smartiptv.client import Credentials, ProviderError, XtreamClient
 from smartiptv.models import Content, content_from_api, episodes_from_api
@@ -139,6 +140,81 @@ class LibraryTests(unittest.TestCase):
         raw = self.library.db.execute("SELECT item FROM progress").fetchone()[0]
         self.assertNotIn("demopass", raw)
         self.assertNotIn("direct_source", raw)
+
+    def test_continue_has_one_latest_episode_per_series_and_preserves_checkpoints(self):
+        second = Content("episode", "2", "Segundo", series_id="9", series_name="Série", episode=2)
+        sixth = Content("episode", "6", "Sexto", series_id="9", series_name="Série", episode=6)
+        other = Content("episode", "20", "Outra", series_id="10", series_name="Série")
+        with patch("smartiptv.storage.time.time", side_effect=[10, 20, 30, 40]):
+            for item in (second, sixth, other, self.movie):
+                self.library.record_progress(item, 10000, 90000)
+        self.assertEqual(self.library.continuing(), [self.movie, other, sixth])
+        self.assertEqual(self.library.checkpoint(second)["position"], 10000)
+        self.assertEqual(self.library.checkpoint(Content("series", "9", "Série"))["item"], sixth)
+        self.library.close()
+        self.library = Library(self.directory.name)
+        self.library.select_account(self.credentials)
+        self.assertEqual(self.library.continuing(), [self.movie, other, sixth])
+
+    def test_continue_uses_most_recently_watched_not_highest_episode_number(self):
+        sixth = Content("episode", "6", "Sexto", series_id="9", episode=6)
+        second = Content("episode", "2", "Segundo", series_id="9", episode=2)
+        with patch("smartiptv.storage.time.time", side_effect=[10, 20]):
+            self.library.record_progress(sixth, 10000, 90000)
+            self.library.record_progress(second, 20000, 90000)
+        self.assertEqual(self.library.continuing(), [second])
+        self.assertEqual(self.library.checkpoint(Content("series", "9", "Série"))["item"], second)
+
+    def test_completed_latest_episode_does_not_resurrect_older_unfinished_one(self):
+        second = Content("episode", "2", "Segundo", series_id="9")
+        sixth = Content("episode", "6", "Sexto", series_id="9")
+        with patch("smartiptv.storage.time.time", side_effect=[10, 20]):
+            self.library.record_progress(second, 10000, 90000)
+            self.library.record_progress(sixth, 90000, 90000, True)
+        self.assertEqual(self.library.continuing(), [])
+        self.assertIsNone(self.library.checkpoint(Content("series", "9", "Série")))
+        self.assertIsNotNone(self.library.checkpoint(second))
+
+    def test_removing_series_from_continue_does_not_reveal_old_duplicates(self):
+        episodes = [Content("episode", str(i), "Episódio", series_id="9") for i in (2, 6)]
+        for episode in episodes:
+            self.library.record_progress(episode, 10000, 90000)
+        self.library.toggle_favorite(episodes[0])
+        self.library.record_progress(self.movie, 10000, 90000)
+        self.library.remove_progress(episodes[-1])
+        self.assertEqual(self.library.continuing(), [self.movie])
+        self.assertTrue(self.library.is_favorite(episodes[0]))
+        self.library.select_account(self.credentials)
+        self.assertEqual(self.library.continuing(), [self.movie])
+
+    def test_episodes_without_series_ids_are_not_merged_by_name(self):
+        episodes = [Content("episode", str(i), "Episódio", series_name="Sem identificação") for i in (1, 2)]
+        for episode in episodes:
+            self.library.record_progress(episode, 10000, 90000)
+        self.assertEqual(len(self.library.continuing()), 2)
+
+    def test_equal_windows_clock_ticks_and_clock_rollback_keep_last_access_first(self):
+        second = Content("episode", "2", "Segundo", series_id="9")
+        sixth = Content("episode", "6", "Sexto", series_id="9")
+        with patch("smartiptv.storage.time.time", side_effect=[42, 42, 10]):
+            self.library.record_progress(second, 10000, 90000)
+            self.library.record_progress(sixth, 10000, 90000)
+            self.assertEqual(self.library.continuing(), [sixth])
+            self.library.record_progress(second, 20000, 90000)
+        self.assertEqual(self.library.continuing(), [second])
+        self.library.select_account(self.credentials)
+        self.assertEqual(self.library.continuing(), [second])
+
+    def test_legacy_equal_timestamps_use_last_persisted_episode(self):
+        second = Content("episode", "2", "Segundo", series_id="9")
+        sixth = Content("episode", "6", "Sexto", series_id="9")
+        self.library.record_progress(second, 10000, 90000)
+        self.library.record_progress(sixth, 10000, 90000)
+        with self.library.db:
+            self.library.db.execute("UPDATE progress SET updated=42 WHERE account=?", (self.library.account,))
+        self.library.select_account(self.credentials)
+        self.assertEqual(self.library.continuing(), [sixth])
+        self.assertEqual(self.library.checkpoint(Content("series", "9", "Série"))["item"], sixth)
 
     @unittest.skipUnless(os.name == "nt", "Windows DPAPI")
     def test_remembered_session_is_encrypted_and_can_be_cleared(self):

@@ -5,6 +5,7 @@ from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 PATHS = {
+    "next": '<path d="m6 5 10 7-10 7ZM19 5v14"/>',
     "settings": '<path d="m9 3-1 3-3 1-2 4 2 2v4l4 3 3-1 3 1 4-3v-4l2-2-2-4-3-1-1-3Z"/><circle cx="12" cy="12" r="3"/>',
     "close": '<path d="m6 6 12 12M18 6 6 18"/>',
     "rewind": '<path d="M4 9a8 8 0 1 1 0 7M4 3v6h6"/><text x="8" y="15" font-size="7" fill="currentColor" stroke-width=".4">10</text>',
