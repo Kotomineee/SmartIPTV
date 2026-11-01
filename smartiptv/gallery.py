@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QAbstractItemView, QListView, QMenu, QScrollArea, 
 
 from .icons import icon
 from .storage import data_directory
+from .scrolling import SmoothScroll
 
 
 class ArtworkCache(QObject):
@@ -23,6 +24,7 @@ class ArtworkCache(QObject):
         self.memory = OrderedDict()
         self.pending = {}
         self.failed = set()
+        self.suspended = False
 
     def get(self, url):
         if not url.startswith(("http://", "https://")):
@@ -30,7 +32,7 @@ class ArtworkCache(QObject):
         if url in self.memory:
             self.memory.move_to_end(url)
             return self.memory[url]
-        if url in self.pending or url in self.failed or len(self.pending) >= 24:
+        if self.suspended or url in self.pending or url in self.failed or len(self.pending) >= 24:
             return None
         request = QNetworkRequest(QUrl(url))
         request.setTransferTimeout(15000)
@@ -65,6 +67,15 @@ class ArtworkCache(QObject):
             reply.abort()
             reply.deleteLater()
         self.pending.clear()
+
+    def set_suspended(self, suspended):
+        if self.suspended == suspended:
+            return
+        self.suspended = suspended
+        if suspended:
+            self.close()
+        else:
+            self.changed.emit()
 
 
 class ContentModel(QAbstractListModel):
@@ -189,6 +200,7 @@ class Gallery(QListView):
         self.setItemDelegate(CardDelegate(library, artwork, compact, self))
         self.setGridSize(QSize(182, 177 if compact else 300))
         self.setSpacing(4)
+        self.smooth_scroll = None if horizontal else SmoothScroll(self)
         if horizontal:
             self.horizontalScrollBar().installEventFilter(self)
             self.setFlow(QListView.Flow.LeftToRight)
@@ -205,10 +217,12 @@ class Gallery(QListView):
         while parent is not None and not isinstance(parent, QScrollArea):
             parent = parent.parentWidget()
         if parent is not None:
-            bar = parent.verticalScrollBar()
-            pixels = event.pixelDelta().y()
-            delta = pixels if pixels else event.angleDelta().y() / 120 * bar.singleStep() * 3
-            bar.setValue(round(bar.value() - delta))
+            if hasattr(parent, "smooth_scroll"):
+                parent.smooth_scroll.wheel(event)
+            else:
+                bar = parent.verticalScrollBar()
+                delta = event.pixelDelta().y() or event.angleDelta().y() / 120 * 96
+                bar.setValue(round(bar.value() - delta))
         event.accept()
 
     def wheelEvent(self, event):
@@ -224,6 +238,8 @@ class Gallery(QListView):
         return super().eventFilter(watched, event)
 
     def set_items(self, items):
+        if self.smooth_scroll:
+            self.smooth_scroll.stop()
         self.content_model.set_items(items)
         self.scrollToTop()
 

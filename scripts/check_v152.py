@@ -12,7 +12,7 @@ from PySide6.QtCore import QEvent, QEventLoop, QPoint, QPointF, Qt, QTimer
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QToolTip
+from PySide6.QtWidgets import QApplication
 from smartiptv.app import Controller
 from smartiptv.player import timestamp
 from smartiptv.storage import Library
@@ -70,6 +70,7 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v152-") as directory:
                 QTest.mouseDClick(detail.episode_list.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
             player = window.player_window
             assert player and player.pending_resume == 10000
+            assert window.artwork.suspended, "Posters still downloading during playback"
             if not NATIVE: headless_video(player)
             player.audio.setMuted(True)
             # Simulate a backend rejecting the first request despite metadata
@@ -96,21 +97,31 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v152-") as directory:
             # Hover uses the exact same style-aware mapping as a click; it
             # shows only a timestamp and cannot move playback or save progress.
             saved = library.checkpoint(episode)["position"]
+            saved_at = library.checkpoint(episode)["updated"]
+            player.flush_progress(); player.flush_progress()
+            assert library.checkpoint(episode)["updated"] == saved_at, "Paused playback rewrote an unchanged checkpoint"
             before = player.player.position()
             for fraction in (0.0, .25, .75, 1.0):
                 point = QPoint(round((player.seek.width() - 1) * fraction), player.seek.height() // 2)
                 hover(player.seek, point)
                 expected = timestamp(int(player.seek._value_at(point) * player.player.duration() / 10000))
-                assert QToolTip.text() == expected, (QToolTip.text(), expected)
+                assert player.seek.hover_label.text() == expected
+                assert player.seek.hover_label.isVisible()
+                assert player.seek.hover_label.geometry().bottom() < player.seek.mapToGlobal(QPoint()).y()
                 assert player.player.position() == before
                 assert library.checkpoint(episode)["position"] == saved
+            for y in (0, player.seek.height() - 1):
+                hover(player.seek, QPoint(player.seek.width() // 2, y))
+                assert player.seek.hover_label.geometry().bottom() < player.seek.mapToGlobal(QPoint()).y(), "Hover timestamp moved below the bar"
             QTest.mouseMove(player.pause, player.pause.rect().center())
             player.toggle_fullscreen()
             app.processEvents()
             hover(player.seek, player.seek.rect().center())
-            assert QToolTip.text() == timestamp(int(player.seek._value_at(player.seek.rect().center()) * player.player.duration() / 10000))
+            assert player.seek.hover_label.text() == timestamp(int(player.seek._value_at(player.seek.rect().center()) * player.player.duration() / 10000))
+            assert player.seek.hover_label.geometry().bottom() < player.seek.mapToGlobal(QPoint()).y()
             player.leave_fullscreen()
             window.leave_player()
+            assert not window.artwork.suspended, "Poster loading did not resume on returning to catalog"
 
         # Closing before any decoded frame must preserve the previous session.
         library.record_progress(episode, 10000, 90000)

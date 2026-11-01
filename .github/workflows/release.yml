@@ -56,6 +56,8 @@ jobs:
         run: python scripts/check_v151.py
       - name: Check confirmed resume and timeline hover
         run: python scripts/check_v152.py
+      - name: Check smooth catalog scrolling
+        run: python scripts/check_v153.py
       - name: Save interface checks
         if: always()
         uses: actions/upload-artifact@v4

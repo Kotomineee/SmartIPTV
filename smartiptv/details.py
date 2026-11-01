@@ -8,6 +8,7 @@ from .player import timestamp
 from .theme import THEME
 from .season_tabs import SeasonTabs
 from .episode_delegate import EpisodeDelegate
+from .scrolling import SmoothScroll
 
 
 class DetailDialog(QFrame):
@@ -76,6 +77,7 @@ class DetailDialog(QFrame):
         self.seasons = SeasonTabs()
         self.seasons.currentChanged.connect(self._season_changed)
         self.episode_list = QListWidget()
+        self.episode_scroll = SmoothScroll(self.episode_list, step=80)
         self.episode_list.setObjectName("episodes")
         self.episode_list.setAccessibleName("Episódios da temporada")
         self.episode_list.setItemDelegate(EpisodeDelegate(self.episode_list))

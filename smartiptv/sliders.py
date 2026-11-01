@@ -1,6 +1,6 @@
 """Sliders with absolute click positioning and native handle/keyboard support."""
 from PySide6.QtCore import QEvent, QPoint, Qt, Signal
-from PySide6.QtWidgets import QSlider, QStyle, QStyleOptionSlider, QToolTip
+from PySide6.QtWidgets import QLabel, QSlider, QStyle, QStyleOptionSlider
 
 
 class ClickSlider(QSlider):
@@ -10,6 +10,10 @@ class ClickSlider(QSlider):
         super().__init__(Qt.Orientation.Horizontal, parent)
         self._absolute_drag = False
         self.hover_formatter = None
+        self.hover_label = QLabel(self, Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowDoesNotAcceptFocus)
+        self.hover_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.hover_label.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.hover_label.setStyleSheet("color:#e8f4eb; background:#20382b; border:1px solid #436149; border-radius:5px; padding:6px 9px;")
         self.setMouseTracking(True)
 
     def _value_at(self, point):
@@ -40,7 +44,14 @@ class ClickSlider(QSlider):
         if self.isEnabled() and self.hover_formatter:
             text = self.hover_formatter(self._value_at(event.position()))
             if text:
-                QToolTip.showText(event.globalPosition().toPoint() + QPoint(0, -28), text, self)
+                if self.hover_label.text() != text:
+                    self.hover_label.setText(text)
+                    self.hover_label.adjustSize()
+                anchor = self.mapToGlobal(QPoint(round(event.position().x()), 0))
+                area = self.screen().availableGeometry()
+                x = max(area.left(), min(anchor.x() - self.hover_label.width() // 2, area.right() - self.hover_label.width() + 1))
+                self.hover_label.move(x, anchor.y() - self.hover_label.height() - 8)
+                self.hover_label.show()
         if self._absolute_drag:
             self.setSliderPosition(self._value_at(event.position()))
             event.accept()
@@ -49,14 +60,14 @@ class ClickSlider(QSlider):
 
     def leaveEvent(self, event):
         if self.hover_formatter:
-            QToolTip.hideText()
+            self.hover_label.hide()
         super().leaveEvent(event)
 
     def event(self, event):
         if event.type() == QEvent.Type.ToolTip and getattr(self, "hover_formatter", None):
             return True
         if event.type() in (QEvent.Type.Hide, QEvent.Type.EnabledChange) and getattr(self, "hover_formatter", None):
-            QToolTip.hideText()
+            self.hover_label.hide()
         return super().event(event)
 
     def mouseReleaseEvent(self, event):

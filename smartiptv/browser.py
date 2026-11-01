@@ -17,6 +17,7 @@ from .login import label
 from .models import Content, content_root
 from .player import PlayerWidget
 from .settings import SettingsPage
+from .scrolling import SmoothScroll
 from .theme import THEME
 
 
@@ -164,6 +165,7 @@ class BrowserWindow(QMainWindow):
 
     def _build_home(self):
         self.home_scroll = QScrollArea()
+        self.home_scroll.smooth_scroll = SmoothScroll(self.home_scroll)
         self.home_scroll.setWidgetResizable(True)
         self.home_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         body = QWidget()
@@ -211,6 +213,7 @@ class BrowserWindow(QMainWindow):
         content.setContentsMargins(0, 0, 0, 0)
         content.setSpacing(20)
         self.categories = QListWidget()
+        self.category_scroll = SmoothScroll(self.categories, step=64)
         self.categories.setObjectName("categories")
         self.categories.setAccessibleName("Categorias do provedor")
         self.categories.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -425,6 +428,7 @@ class BrowserWindow(QMainWindow):
     def play(self, item, restart=False, episodes=None, source_override=None):
         if self.closed:
             return
+        self.artwork.set_suspended(True)
         if self.detail_dialog:
             self.detail_dialog.reject()
         if self.return_context is None:
@@ -476,6 +480,7 @@ class BrowserWindow(QMainWindow):
             self.tasks.cancel(self.episode_task)
             self.episode_task = None
         self._dispose_player()
+        self.artwork.set_suspended(False)
         self.window_pages.setCurrentWidget(self.library_root)
         context = self.return_context or []
         self.return_context = None

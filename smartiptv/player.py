@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from .icons import icon
 from .login import label
 from .sliders import ClickSlider
+from .stream_buffer import StreamBuffer
 
 
 def timestamp(milliseconds):
@@ -53,9 +54,14 @@ class PlayerWidget(QWidget):
         self.resume_ready = False
         self.resume_attempts = 0
         self.resume_last_seek = 0.0
+        self.resume_wrong_frame = False
         self.finished = False
         self.closing = False
         self.fullscreen_state = None
+        self.stream_buffer = None
+        self.buffer_bypass = False
+        self.displayed_second = None
+        self.last_saved_progress = None
         self.setObjectName("playerRoot")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.overlay = QWidget(self)
@@ -306,13 +312,14 @@ class PlayerWidget(QWidget):
     def _show_controls(self):
         if self.closing:
             return
-        self.header.show()
-        self.footer.show()
-        self.unsetCursor()
-        self.video.unsetCursor()
-        self._layout_video()
-        self.overlay.show()
-        self.overlay.raise_()
+        if not self.header.isVisible() or not self.footer.isVisible() or not self.overlay.isVisible():
+            self.header.show()
+            self.footer.show()
+            self.unsetCursor()
+            self.video.unsetCursor()
+            self._layout_video()
+            self.overlay.show()
+            self.overlay.raise_()
         if self.fullscreen_state is not None:
             self.hide_controls_timer.start()
 
@@ -333,7 +340,13 @@ class PlayerWidget(QWidget):
     def _start(self):
         if self.closing:
             return
-        self.player.setSource(self.source)
+        source = self.source
+        if (not self.buffer_bypass and self.item.kind in ("movie", "episode")
+                and source.scheme() in ("http", "https") and self.item.extension.lower() not in ("m3u8", "m3u")):
+            if self.stream_buffer is None:
+                self.stream_buffer = StreamBuffer()
+            source = QUrl(self.stream_buffer.source(source.toString()))
+        self.player.setSource(source)
         self.player.play()
         self.timer.start()
         if self.pending_resume:
@@ -352,11 +365,15 @@ class PlayerWidget(QWidget):
         self.player.stop()
         self.player.setSource(QUrl())
         self.item = item
+        self.buffer_bypass = False
+        self.displayed_second = None
+        self.last_saved_progress = None
         self.set_next_available(False)
         checkpoint = self.library.checkpoint(item)
         self.pending_resume = 0 if restart or not checkpoint else checkpoint["position"]
         self.resume_attempts = 0
         self.resume_last_seek = 0.0
+        self.resume_wrong_frame = False
         self.finished = False
         self.title_label.setText(item.display_name)
         self.title_label.setToolTip(item.display_name)
@@ -379,6 +396,7 @@ class PlayerWidget(QWidget):
         self.resume_ready = False
         self.resume_attempts = 0
         self.resume_last_seek = 0.0
+        self.resume_wrong_frame = False
         self.player.stop()
         self.player.setSource(QUrl())
         self.status.setText("Tentando conectar novamente…")
@@ -386,7 +404,10 @@ class PlayerWidget(QWidget):
 
     def _position(self, value):
         duration = self.player.duration()
-        self.time_label.setText(f"{timestamp(value)} / {'AO VIVO' if self.item.kind == 'live' else timestamp(duration)}")
+        display = (value // 1000, duration // 1000)
+        if display != self.displayed_second:
+            self.displayed_second = display
+            self.time_label.setText(f"{timestamp(value)} / {'AO VIVO' if self.item.kind == 'live' else timestamp(duration)}")
         if duration > 0 and not self.seek.isSliderDown():
             self.seek.setValue(min(10000, int(value * 10000 / duration)))
 
@@ -410,10 +431,15 @@ class PlayerWidget(QWidget):
             now = time.monotonic()
             # Metadata can arrive before FFmpeg accepts seeks. Keep the saved
             # checkpoint protected until a frame at the target is decoded.
-            if not self.resume_attempts or (now - self.resume_last_seek >= 2 and self.player.position() < position - 1000):
+            # A slow network seek is not evidence that the decoder ignored it.
+            # Re-seeking every two seconds used to cancel the very read needed
+            # to resume. Retry promptly only after decoding at the wrong point.
+            retry_after = 2 if self.resume_wrong_frame else 10
+            if not self.resume_attempts or (now - self.resume_last_seek >= retry_after and self.player.position() < position - 1000):
                 if self.resume_attempts < 3:
                     self.resume_attempts += 1
                     self.resume_last_seek = now
+                    self.resume_wrong_frame = False
                     self.player.setPosition(position)
             if self.resume_attempts and now - self.resume_last_seek > 25:
                 self.status.setText("Não foi possível retomar o ponto salvo. Tente novamente.")
@@ -424,6 +450,8 @@ class PlayerWidget(QWidget):
     def _resume_frame(self, frame):
         if self.pending_resume and self.resume_attempts and frame.isValid():
             position = frame.startTime() // 1000
+            if 0 <= position < self.pending_resume - 1000:
+                self.resume_wrong_frame = True
             if self.pending_resume - 1000 <= position <= self.pending_resume + 5000:
                 self.pending_resume = 0
                 self.resume_timer.stop()
@@ -476,6 +504,12 @@ class PlayerWidget(QWidget):
     def _error(self, _error, _message):
         if self.closing:
             return
+        if self.stream_buffer and not self.buffer_bypass:
+            self.buffer_bypass = True
+            self.stream_buffer.close()
+            self.stream_buffer = None
+            self._retry()
+            return
         self.flush_progress()
         self.status.setText("Não foi possível reproduzir. Confira a conexão, o limite de telas da conta ou tente outro conteúdo.")
         self.status.show()
@@ -486,8 +520,12 @@ class PlayerWidget(QWidget):
         if self.pending_resume:
             return
         position = self.player.duration() if self.finished else self.player.position()
+        signature = (self.item.uid, position, self.player.duration(), self.finished)
+        if signature == self.last_saved_progress:
+            return
         try:
             self.library.record_progress(self.item, position, self.player.duration(), self.finished)
+            self.last_saved_progress = signature
         except Exception:
             self.status.setText("Não foi possível salvar o progresso neste computador.")
             self.status.show()
@@ -614,6 +652,9 @@ class PlayerWidget(QWidget):
         self.timer.stop()
         self.resume_timer.stop()
         self.player.stop()
+        if self.stream_buffer:
+            self.stream_buffer.close()
+            self.stream_buffer = None
         self.player.setSource(QUrl())
         self.player.setVideoOutput(None)
         self.player.setAudioOutput(None)
