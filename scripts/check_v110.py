@@ -212,9 +212,11 @@ with tempfile.TemporaryDirectory(prefix="smartiptv-v110-") as directory:
         vertical.setValue(0)
         horizontal.setValue(0)
         wheel(row.viewport())
+        QTest.qWait(220)
         assert vertical.value() > 0 and horizontal.value() == 0
         before = vertical.value()
         wheel(horizontal)
+        QTest.qWait(220)
         assert vertical.value() > before and horizontal.value() == 0
         horizontal.setValue(100)
         assert horizontal.value() == 100

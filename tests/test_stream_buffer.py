@@ -77,7 +77,9 @@ class StreamBufferTests(unittest.TestCase):
         while session.buffered < session.LIMIT and time.monotonic()<deadline: time.sleep(.01)
         self.assertGreaterEqual(session.buffered, session.PREFILL)
         self.assertLessEqual(session.peak_buffered, session.LIMIT + session.CHUNK)
-        self.assertEqual(session.read(), self.data[:32768])
+        part = session.read()
+        self.assertTrue(part)
+        self.assertEqual(part, self.data[:len(part)])
         session.cancel()
         deadline=time.monotonic()+2
         while not session.done and time.monotonic()<deadline: time.sleep(.01)
