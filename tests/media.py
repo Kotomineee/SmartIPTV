@@ -7,5 +7,7 @@ def headless_video(player):
     # metadata and subtitles real while avoiding QRhiWidget GPU presentation.
     if not hasattr(player, "test_sink"):
         player.test_sink = QVideoSink(player)
+        if hasattr(player, "_resume_frame"):
+            player.test_sink.videoFrameChanged.connect(player._resume_frame)
         player.player.setVideoOutput(player.test_sink)
     return player.test_sink

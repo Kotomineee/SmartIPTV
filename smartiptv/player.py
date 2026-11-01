@@ -1,6 +1,7 @@
 """Embedded single-stream player with durable movie/episode checkpoints."""
 import ctypes
 import os
+import time
 from pathlib import Path
 
 import PySide6
@@ -49,6 +50,9 @@ class PlayerWidget(QWidget):
         self.client, self.library, self.item = client, library, item
         checkpoint = library.checkpoint(item)
         self.pending_resume = 0 if restart or not checkpoint else checkpoint["position"]
+        self.resume_ready = False
+        self.resume_attempts = 0
+        self.resume_last_seek = 0.0
         self.finished = False
         self.closing = False
         self.fullscreen_state = None
@@ -92,6 +96,7 @@ class PlayerWidget(QWidget):
         self.seek.setRange(0, 10000)
         self.seek.setEnabled(False)
         self.seek.setAccessibleName("Posição da reprodução")
+        self.seek.hover_formatter = lambda value: timestamp(int(value * self.player.duration() / 10000)) if self.player.duration() > 0 else ""
         self.seek.sliderReleased.connect(self._seek)
         self.seek.keyboardCommitted.connect(self._seek)
         layout.addWidget(self.seek)
@@ -151,6 +156,7 @@ class PlayerWidget(QWidget):
         self.audio.mutedChanged.connect(self._mute_changed)
         self.player.setAudioOutput(self.audio)
         self.player.setVideoOutput(self.video)
+        self.video.videoSink().videoFrameChanged.connect(self._resume_frame)
         self.player.positionChanged.connect(self._position)
         self.player.durationChanged.connect(self._duration)
         self.player.seekableChanged.connect(self._seekable)
@@ -160,6 +166,9 @@ class PlayerWidget(QWidget):
         self.timer = QTimer(self)
         self.timer.setInterval(5000)
         self.timer.timeout.connect(self.flush_progress)
+        self.resume_timer = QTimer(self)
+        self.resume_timer.setInterval(1000)
+        self.resume_timer.timeout.connect(self._apply_resume)
         self.hide_controls_timer = QTimer(self)
         self.hide_controls_timer.setSingleShot(True)
         self.hide_controls_timer.setInterval(2500)
@@ -327,6 +336,8 @@ class PlayerWidget(QWidget):
         self.player.setSource(self.source)
         self.player.play()
         self.timer.start()
+        if self.pending_resume:
+            self.resume_timer.start()
 
     def load_item(self, item, restart=False, source_override=None):
         # Reuse the decoding surface between episodes. Destroying a video sink
@@ -336,12 +347,16 @@ class PlayerWidget(QWidget):
         self.video_double_click = False
         self.flush_progress()
         self.timer.stop()
+        self.resume_timer.stop()
+        self.resume_ready = False
         self.player.stop()
         self.player.setSource(QUrl())
         self.item = item
         self.set_next_available(False)
         checkpoint = self.library.checkpoint(item)
         self.pending_resume = 0 if restart or not checkpoint else checkpoint["position"]
+        self.resume_attempts = 0
+        self.resume_last_seek = 0.0
         self.finished = False
         self.title_label.setText(item.display_name)
         self.title_label.setToolTip(item.display_name)
@@ -360,7 +375,10 @@ class PlayerWidget(QWidget):
         self.video_click_timer.stop()
         self.retry.hide()
         self.finished = False
-        self.pending_resume = self.player.position() or self.pending_resume
+        self.pending_resume = self.pending_resume or self.player.position()
+        self.resume_ready = False
+        self.resume_attempts = 0
+        self.resume_last_seek = 0.0
         self.player.stop()
         self.player.setSource(QUrl())
         self.status.setText("Tentando conectar novamente…")
@@ -383,10 +401,33 @@ class PlayerWidget(QWidget):
         self._apply_resume()
 
     def _apply_resume(self):
-        if self.pending_resume and self.player.isSeekable() and self.player.duration() > 0:
+        if self.closing or not self.pending_resume:
+            self.resume_timer.stop()
+            return
+        if self.resume_ready and self.player.isSeekable() and self.player.duration() > 0:
             position = min(self.pending_resume, max(0, self.player.duration() - 1000))
-            self.pending_resume = 0
-            self.player.setPosition(position)
+            self.pending_resume = position
+            now = time.monotonic()
+            # Metadata can arrive before FFmpeg accepts seeks. Keep the saved
+            # checkpoint protected until a frame at the target is decoded.
+            if not self.resume_attempts or (now - self.resume_last_seek >= 2 and self.player.position() < position - 1000):
+                if self.resume_attempts < 3:
+                    self.resume_attempts += 1
+                    self.resume_last_seek = now
+                    self.player.setPosition(position)
+            if self.resume_attempts and now - self.resume_last_seek > 25:
+                self.status.setText("Não foi possível retomar o ponto salvo. Tente novamente.")
+                self.status.show()
+                self.retry.show()
+                self.resume_timer.stop()
+
+    def _resume_frame(self, frame):
+        if self.pending_resume and self.resume_attempts and frame.isValid():
+            position = frame.startTime() // 1000
+            if self.pending_resume - 1000 <= position <= self.pending_resume + 5000:
+                self.pending_resume = 0
+                self.resume_timer.stop()
+                self.status.hide()
 
     def _seek(self):
         if self.seek.isEnabled() and self.player.duration():
@@ -412,8 +453,13 @@ class PlayerWidget(QWidget):
             self.library_changed.emit()
             self.episode_finished.emit(self.item)
         elif status in (QMediaPlayer.MediaStatus.LoadedMedia, QMediaPlayer.MediaStatus.BufferedMedia):
+            self.resume_ready = True
             self._apply_resume()
-            self.status.hide()
+            if self.pending_resume:
+                self.status.setText("Retomando do ponto salvo…")
+                self.status.show()
+            else:
+                self.status.hide()
         elif status in (QMediaPlayer.MediaStatus.LoadingMedia, QMediaPlayer.MediaStatus.BufferingMedia, QMediaPlayer.MediaStatus.StalledMedia):
             self.status.setText("Carregando a transmissão…")
             self.status.show()
@@ -566,6 +612,7 @@ class PlayerWidget(QWidget):
         self.leave_fullscreen()
         self.overlay.hide()
         self.timer.stop()
+        self.resume_timer.stop()
         self.player.stop()
         self.player.setSource(QUrl())
         self.player.setVideoOutput(None)
